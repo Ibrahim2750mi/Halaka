@@ -12,6 +12,8 @@ const PLAYER_SCENE: PackedScene = preload("res://player.tscn")
 @onready var player_spawner: MultiplayerSpawner = $Players/MultiplayerSpawner
 
 var _lobby_panel: PanelContainer
+var _lobby_controls: VBoxContainer
+var _info_layout: VBoxContainer
 var _address_input: LineEdit
 var _status_label: Label
 var _player_list_label: Label
@@ -37,7 +39,7 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	_update_round_hud()
-	if not multiplayer.has_multiplayer_peer() or not multiplayer.is_server():
+	if not _network_is_active() or not multiplayer.is_server():
 		return
 	if not _round_active:
 		return
@@ -56,14 +58,20 @@ func _process(delta: float) -> void:
 		_refresh_status("Round over")
 	_update_round_hud()
 
+func _network_is_active() -> bool:
+	if not multiplayer.has_multiplayer_peer():
+		return false
+	return multiplayer.multiplayer_peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
+
 func _build_round_hud() -> void:
-	var canvas := CanvasLayer.new()
-	canvas.name = "RoundHUD"
-	add_child(canvas)
+	if _info_layout == null:
+		return
+	_info_layout.add_child(HSeparator.new())
 	_hud_label = Label.new()
-	_hud_label.position = Vector2(28, 270)
+	_hud_label.name = "RoundStatus"
+	_hud_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_hud_label.add_theme_color_override("font_color", Color(1.0, 0.88, 0.72))
-	canvas.add_child(_hud_label)
+	_info_layout.add_child(_hud_label)
 	_update_round_hud()
 
 func _update_round_hud() -> void:
@@ -139,23 +147,27 @@ func _build_lobby_ui() -> void:
 	canvas.name = "LobbyUI"
 	add_child(canvas)
 	_lobby_panel = PanelContainer.new()
+	_lobby_panel.name = "GameInfoPanel"
 	_lobby_panel.position = Vector2(28, 28)
 	_lobby_panel.custom_minimum_size = Vector2(340, 0)
 	canvas.add_child(_lobby_panel)
-	var layout := VBoxContainer.new()
-	_lobby_panel.add_child(layout)
+	_info_layout = VBoxContainer.new()
+	_lobby_panel.add_child(_info_layout)
+	_lobby_controls = VBoxContainer.new()
+	_info_layout.add_child(_lobby_controls)
 	var title := Label.new()
 	title.text = "CAVE HUNT  |  2–4 PLAYERS"
-	layout.add_child(title)
+	_lobby_controls.add_child(title)
 	var instructions := Label.new()
 	instructions.text = "Host a game or enter the host's LAN address."
-	layout.add_child(instructions)
+	instructions.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_lobby_controls.add_child(instructions)
 	_address_input = LineEdit.new()
 	_address_input.placeholder_text = "Host IP address"
 	_address_input.text = "127.0.0.1"
-	layout.add_child(_address_input)
+	_lobby_controls.add_child(_address_input)
 	var buttons := HBoxContainer.new()
-	layout.add_child(buttons)
+	_lobby_controls.add_child(buttons)
 	var host_button := Button.new()
 	host_button.text = "Host Game"
 	host_button.pressed.connect(_host_game)
@@ -164,12 +176,12 @@ func _build_lobby_ui() -> void:
 	join_button.text = "Join Game"
 	join_button.pressed.connect(_join_game)
 	buttons.add_child(join_button)
+	_info_layout.add_child(HSeparator.new())
 	_status_label = Label.new()
-	_status_label.position = Vector2(28, 190)
-	canvas.add_child(_status_label)
+	_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_info_layout.add_child(_status_label)
 	_player_list_label = Label.new()
-	_player_list_label.position = Vector2(28, 220)
-	canvas.add_child(_player_list_label)
+	_info_layout.add_child(_player_list_label)
 	_refresh_player_list()
 
 func _host_game() -> void:
@@ -180,7 +192,7 @@ func _host_game() -> void:
 		return
 	multiplayer.multiplayer_peer = peer
 	_spawn_peer(1)
-	_lobby_panel.hide()
+	_lobby_controls.hide()
 	_refresh_status("Hosting on port %d" % GAME_PORT)
 
 func _join_game() -> void:
@@ -235,7 +247,7 @@ func _on_player_despawned(_player: Node) -> void:
 	_update_round_hud.call_deferred()
 
 func _on_connected_to_server() -> void:
-	_lobby_panel.hide()
+	_lobby_controls.hide()
 	_refresh_status("Connected to host")
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	_update_round_hud()
@@ -243,10 +255,11 @@ func _on_connected_to_server() -> void:
 func _on_connection_failed() -> void:
 	_set_status("Connection failed. Check the host IP and port %d." % GAME_PORT)
 	multiplayer.multiplayer_peer = null
+	_lobby_controls.show()
 
 func _on_server_disconnected() -> void:
 	_set_status("Host disconnected.")
-	_lobby_panel.show()
+	_lobby_controls.show()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 func _refresh_status(message: String) -> void:
@@ -261,7 +274,7 @@ func _refresh_player_list() -> void:
 	var lines: PackedStringArray = ["Players (%d/4):" % active_players.size()]
 	for player in active_players:
 		var entry := "Player %d" % player.owner_peer_id
-		if player.owner_peer_id == multiplayer.get_unique_id():
+		if _network_is_active() and player.owner_peer_id == multiplayer.get_unique_id():
 			entry += " (you)"
 		lines.append(entry)
 	if active_players.is_empty():

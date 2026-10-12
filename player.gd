@@ -27,7 +27,7 @@ var _death_label: Label
 var _last_alive_state := true
 
 func _ready() -> void:
-	var is_local := multiplayer.get_unique_id() == owner_peer_id
+	var is_local := _is_local_player()
 	camera.current = is_local
 	if is_local:
 		camera.make_current()
@@ -53,7 +53,7 @@ func _ready() -> void:
 	add_to_group("players")
 
 func _process(_delta: float) -> void:
-	var is_local := multiplayer.get_unique_id() == owner_peer_id
+	var is_local := _is_local_player()
 	if is_alive != _last_alive_state:
 		_apply_alive_state(is_local)
 		_last_alive_state = is_alive
@@ -61,6 +61,13 @@ func _process(_delta: float) -> void:
 		_death_label.visible = not is_alive
 		if not is_alive:
 			_death_label.text = "CAUGHT  |  Respawning in %d" % ceili(respawn_remaining)
+
+func _is_local_player() -> bool:
+	if not multiplayer.has_multiplayer_peer():
+		return false
+	if multiplayer.multiplayer_peer.get_connection_status() != MultiplayerPeer.CONNECTION_CONNECTED:
+		return false
+	return multiplayer.get_unique_id() == owner_peer_id
 
 func _apply_alive_state(is_local: bool) -> void:
 	visual.visible = not is_local and is_alive
@@ -82,7 +89,7 @@ func _create_death_overlay() -> void:
 	canvas.add_child(_death_label)
 
 func _unhandled_input(event: InputEvent) -> void:
-	if multiplayer.get_unique_id() != owner_peer_id:
+	if not _is_local_player():
 		return
 	if not is_alive:
 		return
@@ -96,7 +103,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func _physics_process(delta: float) -> void:
-	if not multiplayer.has_multiplayer_peer():
+	if not _network_is_active():
 		return
 	if not round_active or not is_alive:
 		velocity = Vector3.ZERO
@@ -108,7 +115,7 @@ func _physics_process(delta: float) -> void:
 			camera.rotation.x = _remote_pitch
 		var server_jump := Input.is_key_pressed(KEY_SPACE) if owner_peer_id == 1 else _remote_jump
 		_simulate_movement(delta, server_input, server_jump)
-	elif multiplayer.get_unique_id() == owner_peer_id:
+	elif _is_local_player():
 		var predicted_input := _read_move_input()
 		var jump_pressed := Input.is_key_pressed(KEY_SPACE)
 		_simulate_movement(delta, predicted_input, jump_pressed)
@@ -116,6 +123,11 @@ func _physics_process(delta: float) -> void:
 		if _input_send_timer <= 0.0:
 			_submit_input.rpc_id(1, predicted_input, rotation.y, _camera_pitch, jump_pressed)
 			_input_send_timer = 1.0 / 30.0
+
+func _network_is_active() -> bool:
+	if not multiplayer.has_multiplayer_peer():
+		return false
+	return multiplayer.multiplayer_peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
 
 func _simulate_movement(delta: float, move_input: Vector2, jump_pressed: bool) -> void:
 	move_input = move_input.normalized()
