@@ -8,23 +8,29 @@ extends CharacterBody3D
 @export var repath_interval := 0.55
 
 @onready var maze: Node = get_node(maze_path)
-@onready var player: CharacterBody3D = get_node(player_path)
 
 var _path: Array[Vector2i] = []
 var _path_index := 0
 var _repath_timer := 0.0
 var _run_animation: StringName = &""
 var _animation_player: AnimationPlayer
+var _initialized := false
 
 func _ready() -> void:
-	var start_cell: Vector2i = maze.world_to_cell(player.global_position)
-	var spawn_cell: Vector2i = maze.find_farthest_cell(start_cell)
-	global_position = maze.cell_to_world(spawn_cell)
 	_find_animation_player(self)
 	_select_run_animation()
-	_update_path()
 
 func _physics_process(delta: float) -> void:
+	if not is_multiplayer_authority():
+		return
+	var active_players := get_tree().get_nodes_in_group("players")
+	if active_players.is_empty():
+		return
+	if not _initialized:
+		var start_cell: Vector2i = maze.world_to_cell(active_players[0].global_position)
+		global_position = maze.cell_to_world(maze.find_farthest_cell(start_cell))
+		_initialized = true
+		_update_path()
 	_repath_timer -= delta
 	if _repath_timer <= 0.0:
 		_update_path()
@@ -51,8 +57,13 @@ func _physics_process(delta: float) -> void:
 
 func _update_path() -> void:
 	var current_cell: Vector2i = maze.world_to_cell(global_position)
-	var target_cell: Vector2i = maze.world_to_cell(player.global_position)
-	_path = maze.find_path(current_cell, target_cell)
+	var shortest_path: Array[Vector2i] = []
+	for player in get_tree().get_nodes_in_group("players"):
+		var target_cell: Vector2i = maze.world_to_cell(player.global_position)
+		var candidate: Array[Vector2i] = maze.find_path(current_cell, target_cell)
+		if not candidate.is_empty() and (shortest_path.is_empty() or candidate.size() < shortest_path.size()):
+			shortest_path = candidate
+	_path = shortest_path
 	_path_index = 1 if _path.size() > 1 else 0
 
 func _find_animation_player(node: Node) -> void:

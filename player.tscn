@@ -1,0 +1,69 @@
+[gd_scene load_steps=7 format=3]
+
+[ext_resource type="Script" path="res://player.gd" id="1_player"]
+
+[sub_resource type="CapsuleShape3D" id="PlayerCollider"]
+radius = 0.35
+height = 1.8
+
+[sub_resource type="SceneReplicationConfig" id="PlayerReplication"]
+properties/0/path = NodePath(".:position")
+properties/0/spawn = true
+properties/0/replication_mode = 1
+properties/1/path = NodePath(".:rotation")
+properties/1/spawn = true
+properties/1/replication_mode = 1
+
+[sub_resource type="CapsuleMesh" id="PlayerVisual"]
+radius = 0.35
+height = 1.8
+
+[sub_resource type="CylinderMesh" id="LocalFlashlightBeamMesh"]
+top_radius = 0.0
+bottom_radius = 6.8
+height = 18.0
+radial_segments = 32
+
+[sub_resource type="StandardMaterial3D" id="LocalFlashlightBeamMaterial"]
+transparency = 1
+shading_mode = 0
+cull_mode = 2
+albedo_color = Color(1, 0.84, 0.63, 0.045)
+emission_enabled = true
+emission = Color(1, 0.76, 0.45, 1)
+emission_energy_multiplier = 0.15
+
+[node name="Player" type="CharacterBody3D"]
+script = ExtResource("1_player")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+position = Vector3(0, 0.9, 0)
+shape = SubResource("PlayerCollider")
+
+[node name="Visual" type="MeshInstance3D" parent="."]
+position = Vector3(0, 0.9, 0)
+mesh = SubResource("PlayerVisual")
+
+[node name="Camera3D" type="Camera3D" parent="."]
+position = Vector3(0, 1.55, 0)
+fov = 75.0
+far = 22.0
+
+[node name="Flashlight" type="SpotLight3D" parent="Camera3D"]
+light_color = Color(1, 0.84, 0.63, 1)
+light_energy = 3.0
+light_volumetric_fog_energy = 2.0
+shadow_enabled = true
+spot_range = 16.0
+spot_angle = 32.0
+
+[node name="LocalBeam" type="MeshInstance3D" parent="Camera3D"]
+position = Vector3(0, 0, -9)
+rotation = Vector3(1.570796, 0, 0)
+mesh = SubResource("LocalFlashlightBeamMesh")
+surface_material_override/0 = SubResource("LocalFlashlightBeamMaterial")
+cast_shadow = 0
+
+[node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="."]
+root_path = NodePath("..")
+replication_config = SubResource("PlayerReplication")

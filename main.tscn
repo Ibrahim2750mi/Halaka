@@ -6,6 +6,7 @@
 [ext_resource type="PackedScene" uid="uid://cqepn1fs7o53f" path="res://kenney_modular-cave-kit_1.0/Models/GLB format/template-wall.glb" id="3_272bh"]
 [ext_resource type="Script" uid="uid://db8osjkcxotra" path="res://monster.gd" id="3_monster"]
 [ext_resource type="PackedScene" uid="uid://8y1y8lxd6j6g" path="res://Moonveil-Cinder-Oni-Characters/MOONVEIL TRIAL original Cinder Oni demon boss BERSERK final/MOONVEIL TRIAL original Cinder Oni demon boss BERSERK final.glb" id="4_monster_model"]
+[ext_resource type="Script" path="res://main.gd" id="5_main"]
 
 [sub_resource type="Environment" id="Environment_horror"]
 background_mode = 1
@@ -17,6 +18,9 @@ fog_enabled = true
 fog_light_color = Color(0.012, 0.018, 0.025, 1)
 fog_sun_scatter = 0.08
 fog_density = 0.06
+volumetric_fog_enabled = true
+volumetric_fog_density = 0.04
+volumetric_fog_albedo = Color(0.18, 0.19, 0.21, 1)
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_8305y"]
 resource_name = "colormap"
@@ -1633,7 +1637,16 @@ height = 1.8
 radius = 0.48
 height = 2.8
 
+[sub_resource type="SceneReplicationConfig" id="MonsterReplication"]
+properties/0/path = NodePath(".:position")
+properties/0/spawn = true
+properties/0/replication_mode = 1
+properties/1/path = NodePath(".:rotation")
+properties/1/spawn = true
+properties/1/replication_mode = 1
+
 [node name="Main" type="Node3D" unique_id=818381567]
+script = ExtResource("5_main")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=960056847]
 environment = SubResource("Environment_horror")
@@ -5099,25 +5112,10 @@ transform = Transform3D(-3.059797e-08, 0, 0.4, 0, 1, 0, -0.7, 0, -1.7484556e-08,
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 26, 2.025, 21)
 shape = SubResource("BoxShape3D_58oct")
 
-[node name="Player" type="CharacterBody3D" parent="." unique_id=1169499810]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 1, 0.1, 1)
-script = ExtResource("2_player")
+[node name="Players" type="Node3D" parent="."]
 
-[node name="CollisionShape3D" type="CollisionShape3D" parent="Player" unique_id=1142802479]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.9, 0)
-shape = SubResource("CapsuleShape_player")
-
-[node name="Camera3D" type="Camera3D" parent="Player" unique_id=251069290]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.55, 0)
-current = true
-far = 22.0
-
-[node name="Flashlight" type="SpotLight3D" parent="Player/Camera3D" unique_id=96113773]
-light_color = Color(1, 0.84, 0.63, 1)
-light_energy = 3.0
-shadow_enabled = true
-spot_range = 16.0
-spot_angle = 32.0
+[node name="MultiplayerSpawner" type="MultiplayerSpawner" parent="Players"]
+spawn_path = NodePath("..")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=211155303]
 transform = Transform3D(0.86602527, 0.3535535, -0.35355362, 0, 0.7071069, 0.70710665, 0.50000024, -0.6123722, 0.61237246, 0, 0, 0)
@@ -5137,3 +5135,7 @@ shape = SubResource("CapsuleShape_monster")
 transform = Transform3D(-2.5, 0, -9.735359e-07, 0, 2.5, 0, 9.735359e-07, 0, -2.5, -0.805, 2.5, 0.633)
 
 [node name="CinderOni" parent="Monster/Visual" unique_id=390900769 instance=ExtResource("4_monster_model")]
+
+[node name="MultiplayerSynchronizer" type="MultiplayerSynchronizer" parent="Monster"]
+root_path = NodePath("..")
+replication_config = SubResource("MonsterReplication")

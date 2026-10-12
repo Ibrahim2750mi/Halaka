@@ -1,4 +1,5 @@
 extends CharacterBody3D
+## Each player controls only their own avatar. MultiplayerSynchronizer shares its transform.
 
 @export var move_speed := 5.0
 @export var jump_speed := 4.5
@@ -6,12 +7,40 @@ extends CharacterBody3D
 @export var gravity := 18.0
 
 @onready var camera: Camera3D = $Camera3D
+@onready var visual: MeshInstance3D = $Visual
+@onready var flashlight: SpotLight3D = $Camera3D/Flashlight
+@onready var local_beam: MeshInstance3D = $Camera3D/LocalBeam
+var owner_peer_id := 1
 var _camera_pitch := 0.0
+var _remote_input := Vector2.ZERO
+var _remote_yaw := 0.0
+var _remote_pitch := 0.0
+var _remote_jump := false
 
 func _ready() -> void:
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	var is_local := multiplayer.get_unique_id() == owner_peer_id
+	camera.current = is_local
+	if is_local:
+		camera.make_current()
+	flashlight.visible = true
+	flashlight.position = Vector3(0.0, -0.05, -0.2)
+	flashlight.light_energy = 5.0
+	flashlight.spot_range = 20.0
+	flashlight.spot_angle = 42.0
+	flashlight.light_volumetric_fog_energy = 6.0
+	local_beam.visible = is_local
+	visual.visible = not is_local
+	var player_colors: Array[Color] = [Color(0.22, 0.75, 0.95), Color(0.96, 0.42, 0.24), Color(0.56, 0.9, 0.38), Color(0.86, 0.55, 0.96)]
+	var player_material := StandardMaterial3D.new()
+	player_material.albedo_color = player_colors[(owner_peer_id - 1) % player_colors.size()]
+	visual.material_override = player_material
+	if is_local and multiplayer.has_multiplayer_peer():
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	add_to_group("players")
 
 func _unhandled_input(event: InputEvent) -> void:
+	if multiplayer.get_unique_id() != owner_peer_id:
+		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		rotate_y(-event.relative.x * mouse_sensitivity)
 		_camera_pitch = clampf(_camera_pitch - event.relative.y * mouse_sensitivity, deg_to_rad(-85.0), deg_to_rad(85.0))
@@ -22,6 +51,33 @@ func _unhandled_input(event: InputEvent) -> void:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 func _physics_process(delta: float) -> void:
+	if not multiplayer.has_multiplayer_peer():
+		return
+	var move_input := _read_move_input() if multiplayer.is_server() and owner_peer_id == 1 else Vector2.ZERO
+	if not multiplayer.is_server() and multiplayer.get_unique_id() == owner_peer_id:
+		move_input = _read_move_input()
+		_submit_input.rpc_id(1, move_input, rotation.y, _camera_pitch, Input.is_key_pressed(KEY_SPACE))
+		return
+	if not multiplayer.is_server():
+		return
+	if owner_peer_id != 1:
+		move_input = _remote_input
+		rotation.y = _remote_yaw
+		camera.rotation.x = _remote_pitch
+	move_input = move_input.normalized()
+	var move_direction := global_basis.x * move_input.x + global_basis.z * move_input.y
+	velocity.x = move_direction.x * move_speed
+	velocity.z = move_direction.z * move_speed
+	if is_on_floor():
+		if owner_peer_id == 1 and Input.is_key_pressed(KEY_SPACE):
+			velocity.y = jump_speed
+		elif owner_peer_id != 1 and _remote_jump:
+			velocity.y = jump_speed
+	else:
+		velocity.y -= gravity * delta
+	move_and_slide()
+
+func _read_move_input() -> Vector2:
 	var move_input := Vector2.ZERO
 	if Input.is_key_pressed(KEY_A):
 		move_input.x -= 1.0
@@ -31,13 +87,13 @@ func _physics_process(delta: float) -> void:
 		move_input.y -= 1.0
 	if Input.is_key_pressed(KEY_S):
 		move_input.y += 1.0
-	move_input = move_input.normalized()
-	var move_direction := global_basis.x * move_input.x + global_basis.z * move_input.y
-	velocity.x = move_direction.x * move_speed
-	velocity.z = move_direction.z * move_speed
-	if is_on_floor():
-		if Input.is_key_pressed(KEY_SPACE):
-			velocity.y = jump_speed
-	else:
-		velocity.y -= gravity * delta
-	move_and_slide()
+	return move_input.normalized()
+
+@rpc("any_peer", "unreliable")
+func _submit_input(move_input: Vector2, body_yaw: float, camera_pitch: float, jump_pressed: bool) -> void:
+	if not multiplayer.is_server() or multiplayer.get_remote_sender_id() != owner_peer_id:
+		return
+	_remote_input = move_input
+	_remote_yaw = body_yaw
+	_remote_pitch = camera_pitch
+	_remote_jump = jump_pressed
