@@ -32,7 +32,7 @@ func _physics_process(delta: float) -> void:
 	if Input.is_key_pressed(KEY_S):
 		move_input.y += 1.0
 	move_input = move_input.normalized()
-	var move_direction := global_basis.x * move_input.x - global_basis.z * move_input.y
+	var move_direction := global_basis.x * move_input.x + global_basis.z * move_input.y
 	velocity.x = move_direction.x * move_speed
 	velocity.z = move_direction.z * move_speed
 	if is_on_floor():

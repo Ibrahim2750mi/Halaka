@@ -13,13 +13,13 @@ height = 1.8
 script = ExtResource("1_maze")
 size_x = 8
 size_y = 8
-corridor_width = 4.0
+corridor_width = 6.0
 wall_width = 0.2
 height = 2.5
 random_seed = 23
 
 [node name="Player" type="CharacterBody3D" parent="."]
-position = Vector3(-14, 0.1, -14)
+position = Vector3(-21, 0.1, -21)
 script = ExtResource("2_player")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="Player"]

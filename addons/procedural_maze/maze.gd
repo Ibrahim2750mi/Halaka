@@ -12,7 +12,7 @@ extends StaticBody3D
 		size_y = value
 		if is_inside_tree():
 			generate()
-@export_range(1.0, 20.0, 0.1) var corridor_width := 4.0:
+@export_range(1.0, 20.0, 0.1) var corridor_width := 6.0:
 	set(value):
 		corridor_width = value
 		if is_inside_tree():
@@ -39,6 +39,7 @@ const CORNER_ASSET: PackedScene = preload("res://kenney_modular-cave-kit_1.0/Mod
 const END_ASSET: PackedScene = preload("res://kenney_modular-cave-kit_1.0/Models/GLB format/corridor-end.glb")
 const JUNCTION_ASSET: PackedScene = preload("res://kenney_modular-cave-kit_1.0/Models/GLB format/corridor-junction.glb")
 const INTERSECTION_ASSET: PackedScene = preload("res://kenney_modular-cave-kit_1.0/Models/GLB format/corridor-intersection.glb")
+const FLOOR_ASSET: PackedScene = preload("res://kenney_modular-cave-kit_1.0/Models/GLB format/template-floor.glb")
 var _cells: Array = []
 
 func _ready() -> void:
@@ -84,22 +85,23 @@ func _build_geometry() -> void:
 	for x in range(size_x):
 		for y in range(size_y):
 			var center := origin + Vector3(x * pitch, 0.0, y * pitch)
+			var floor_tile: Node3D = FLOOR_ASSET.instantiate()
+			floor_tile.name = "CaveFloor_%d_%d" % [x, y]
+			floor_tile.position = center + Vector3(0.0, -0.03, 0.0)
+			floor_tile.scale = Vector3(pitch / 4.0, 1.0, pitch / 4.0)
+			add_child(floor_tile)
+			floor_tile.owner = get_tree().edited_scene_root if Engine.is_editor_hint() else null
 			var openings: int = _cells[x][y]
 			var tile_choice := _tile_for_openings(openings)
 			var cave_tile: Node3D = tile_choice.scene.instantiate()
 			cave_tile.name = "CaveTile_%d_%d" % [x, y]
 			cave_tile.position = center
+			cave_tile.scale = Vector3(pitch / 4.0, 1.0, pitch / 4.0)
 			cave_tile.rotation.y = tile_choice.rotation
 			add_child(cave_tile)
 			cave_tile.owner = get_tree().edited_scene_root if Engine.is_editor_hint() else null
-			if (openings & (1 << 0)) == 0:
-				_add_collision_box("WallCollision", Vector3(wall_width, height, pitch), center + Vector3(-0.5 * pitch, height * 0.5, 0.0))
-			if (openings & (1 << 1)) == 0:
-				_add_collision_box("WallCollision", Vector3(pitch, height, wall_width), center + Vector3(0.0, height * 0.5, -0.5 * pitch))
-			if x == size_x - 1 and (openings & (1 << 2)) == 0:
-				_add_collision_box("WallCollision", Vector3(wall_width, height, pitch), center + Vector3(0.5 * pitch, height * 0.5, 0.0))
-			if y == size_y - 1 and (openings & (1 << 3)) == 0:
-				_add_collision_box("WallCollision", Vector3(pitch, height, wall_width), center + Vector3(0.0, height * 0.5, 0.5 * pitch))
+			if not Engine.is_editor_hint():
+				_add_mesh_collisions(cave_tile)
 
 func _tile_for_openings(openings: int) -> Dictionary:
 	var degree := 0
@@ -146,3 +148,9 @@ func _add_collision_box(node_name: String, box_size: Vector3, position: Vector3)
 	collision.position = position
 	add_child(collision)
 	collision.owner = get_tree().edited_scene_root if Engine.is_editor_hint() else null
+
+func _add_mesh_collisions(node: Node) -> void:
+	for child in node.get_children():
+		if child is MeshInstance3D and child.mesh != null:
+			child.create_trimesh_collision()
+		_add_mesh_collisions(child)
