@@ -18,9 +18,7 @@ fog_enabled = true
 fog_light_color = Color(0.012, 0.018, 0.025, 1)
 fog_sun_scatter = 0.08
 fog_density = 0.06
-volumetric_fog_enabled = true
-volumetric_fog_density = 0.04
-volumetric_fog_albedo = Color(0.18, 0.19, 0.21, 1)
+volumetric_fog_enabled = false
 
 [sub_resource type="StandardMaterial3D" id="StandardMaterial3D_8305y"]
 resource_name = "colormap"

@@ -39,12 +39,16 @@ var _open_cells: Array[PackedByteArray] = []
 var _chamber_baffles: Array[Dictionary] = []
 
 func _ready() -> void:
-	generate()
+	# The editor saves generated maze geometry into the scene. At runtime, rebuild
+	# the navigation data but keep those saved nodes instead of duplicating them.
+	var rebuild_geometry := Engine.is_editor_hint() or get_child_count() == 0
+	generate(rebuild_geometry)
 
-func generate() -> void:
-	for child in get_children():
-		remove_child(child)
-		child.queue_free()
+func generate(rebuild_geometry := true) -> void:
+	if rebuild_geometry:
+		for child in get_children():
+			remove_child(child)
+			child.queue_free()
 	_open_cells.clear()
 	_chamber_baffles.clear()
 	for x in range(size_x):
@@ -79,7 +83,8 @@ func generate() -> void:
 		while second == first:
 			second = rng.randi_range(0, chambers.size() - 1)
 		_carve_passage(chambers[first], chambers[second], rng)
-	_build_geometry()
+	if rebuild_geometry:
+		_build_geometry()
 
 func _add_chamber_baffles(center: Vector2i, radius_x: float, radius_y: float, add_cross_walls: bool, protect_spawn := false) -> void:
 	var row_offsets: Array[int] = [-4, -2, 0, 2, 4]

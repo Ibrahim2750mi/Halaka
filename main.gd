@@ -12,6 +12,8 @@ const PLAYER_SCENE: PackedScene = preload("res://player.tscn")
 var _lobby_panel: PanelContainer
 var _address_input: LineEdit
 var _status_label: Label
+var _player_list_label: Label
+var _status_message := "Waiting for a host."
 
 func _ready() -> void:
 	player_spawner.spawn_function = _spawn_player
@@ -20,6 +22,8 @@ func _ready() -> void:
 	multiplayer.connected_to_server.connect(_on_connected_to_server)
 	multiplayer.connection_failed.connect(_on_connection_failed)
 	multiplayer.server_disconnected.connect(_on_server_disconnected)
+	player_spawner.spawned.connect(_on_player_spawned)
+	player_spawner.despawned.connect(_on_player_despawned)
 	_build_lobby_ui()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
@@ -54,9 +58,12 @@ func _build_lobby_ui() -> void:
 	join_button.pressed.connect(_join_game)
 	buttons.add_child(join_button)
 	_status_label = Label.new()
-	_status_label.text = "Waiting for a host."
 	_status_label.position = Vector2(28, 190)
 	canvas.add_child(_status_label)
+	_player_list_label = Label.new()
+	_player_list_label.position = Vector2(28, 220)
+	canvas.add_child(_player_list_label)
+	_refresh_player_list()
 
 func _host_game() -> void:
 	var peer := ENetMultiplayerPeer.new()
@@ -100,14 +107,23 @@ func _on_peer_connected(peer_id: int) -> void:
 	if multiplayer.is_server():
 		_spawn_peer(peer_id)
 		_refresh_status("Player %d joined" % peer_id)
+	else:
+		_refresh_player_list.call_deferred()
 
 func _on_peer_disconnected(peer_id: int) -> void:
-	if not multiplayer.is_server():
-		return
-	var player := players.get_node_or_null("Player_%d" % peer_id)
-	if player != null:
-		player_spawner.despawn(player)
-	_refresh_status("Player %d left" % peer_id)
+	if multiplayer.is_server():
+		var player := players.get_node_or_null("Player_%d" % peer_id)
+		if player != null:
+			player_spawner.despawn(player)
+			_refresh_status.call_deferred("Player %d left" % peer_id)
+	else:
+		_refresh_player_list.call_deferred()
+
+func _on_player_spawned(_player: Node) -> void:
+	_refresh_player_list.call_deferred()
+
+func _on_player_despawned(_player: Node) -> void:
+	_refresh_player_list.call_deferred()
 
 func _on_connected_to_server() -> void:
 	_lobby_panel.hide()
@@ -124,9 +140,30 @@ func _on_server_disconnected() -> void:
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 func _refresh_status(message: String) -> void:
-	var player_count := get_tree().get_nodes_in_group("players").size()
-	_set_status("%s  |  Players: %d/4" % [message, player_count])
+	_status_message = message
+	_refresh_player_list()
+
+func _refresh_player_list() -> void:
+	if _player_list_label == null:
+		return
+	var active_players := get_tree().get_nodes_in_group("players")
+	active_players.sort_custom(func(a: Node, b: Node) -> bool: return a.owner_peer_id < b.owner_peer_id)
+	var lines: PackedStringArray = ["Players (%d/4):" % active_players.size()]
+	for player in active_players:
+		var entry := "Player %d" % player.owner_peer_id
+		if player.owner_peer_id == multiplayer.get_unique_id():
+			entry += " (you)"
+		lines.append(entry)
+	if active_players.is_empty():
+		lines.append("Waiting for players...")
+	_player_list_label.text = "\n".join(lines)
+	_render_status()
 
 func _set_status(message: String) -> void:
+	_status_message = message
+	_render_status()
+
+func _render_status() -> void:
 	if _status_label != null:
-		_status_label.text = message
+		var player_count := get_tree().get_nodes_in_group("players").size()
+		_status_label.text = "%s  |  Players: %d/4" % [_status_message, player_count]
