@@ -3,6 +3,8 @@ extends Node3D
 
 const GAME_PORT := 2456
 const MAX_REMOTE_PLAYERS := 3
+const ROUND_LENGTH := 180.0
+const RESPAWN_DELAY := 15.0
 const PLAYER_SCENE: PackedScene = preload("res://player.tscn")
 
 @onready var maze: Node = $Maze
@@ -14,6 +16,11 @@ var _address_input: LineEdit
 var _status_label: Label
 var _player_list_label: Label
 var _status_message := "Waiting for a host."
+var _round_active := false
+var _round_finished := false
+var _round_time_left := ROUND_LENGTH
+var _hud_label: Label
+var _round_sync_timer := 0.0
 
 func _ready() -> void:
 	player_spawner.spawn_function = _spawn_player
@@ -25,7 +32,107 @@ func _ready() -> void:
 	player_spawner.spawned.connect(_on_player_spawned)
 	player_spawner.despawned.connect(_on_player_despawned)
 	_build_lobby_ui()
+	_build_round_hud()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+func _process(delta: float) -> void:
+	_update_round_hud()
+	if not multiplayer.has_multiplayer_peer() or not multiplayer.is_server():
+		return
+	if not _round_active:
+		return
+	_round_time_left = maxf(0.0, _round_time_left - delta)
+	_update_players(delta)
+	_round_sync_timer -= delta
+	if _round_sync_timer <= 0.0:
+		_round_sync_timer = 1.0
+		_sync_round_state.rpc(_round_active, _round_time_left, _round_finished)
+	if _round_time_left <= 0.0:
+		_round_active = false
+		_round_finished = true
+		for player in get_tree().get_nodes_in_group("players"):
+			player.round_active = false
+		_sync_round_state.rpc(_round_active, _round_time_left, _round_finished)
+		_refresh_status("Round over")
+	_update_round_hud()
+
+func _build_round_hud() -> void:
+	var canvas := CanvasLayer.new()
+	canvas.name = "RoundHUD"
+	add_child(canvas)
+	_hud_label = Label.new()
+	_hud_label.position = Vector2(28, 270)
+	_hud_label.add_theme_color_override("font_color", Color(1.0, 0.88, 0.72))
+	canvas.add_child(_hud_label)
+	_update_round_hud()
+
+func _update_round_hud() -> void:
+	if _hud_label == null:
+		return
+	var heading := "Waiting for another player..."
+	if _round_active:
+		heading = "Round: %d:%02d" % [int(_round_time_left) / 60, int(_round_time_left) % 60]
+	elif _round_finished:
+		heading = "ROUND OVER"
+	var lines: PackedStringArray = [heading, ""]
+	var active_players := get_tree().get_nodes_in_group("players")
+	active_players.sort_custom(func(a: Node, b: Node) -> bool: return a.owner_peer_id < b.owner_peer_id)
+	for player in active_players:
+		var state := "Alive"
+		if not player.is_alive:
+			state = "Respawning: %d" % ceili(player.respawn_remaining)
+		lines.append("P%d  %s  |  %d pts  |  %ds alive" % [player.owner_peer_id, state, int(player.score), int(player.total_alive_time)])
+	_hud_label.text = "\n".join(lines)
+
+func _update_players(delta: float) -> void:
+	for player in get_tree().get_nodes_in_group("players"):
+		if player.is_alive:
+			player.total_alive_time += delta
+			# The point rate rises with this player's own accumulated survival time.
+			player.score += delta * (1.0 + player.total_alive_time / 60.0)
+			if _is_caught_by_monster(player):
+				player.is_alive = false
+				player.respawn_remaining = RESPAWN_DELAY
+				player.velocity = Vector3.ZERO
+		else:
+			player.respawn_remaining = maxf(0.0, player.respawn_remaining - delta)
+			if player.respawn_remaining <= 0.0:
+				_respawn_player(player)
+
+func _is_caught_by_monster(player: Node3D) -> bool:
+	var monster := get_node_or_null("Monster") as CharacterBody3D
+	return monster != null and monster.global_position.distance_to(player.global_position) <= 1.35
+
+func _respawn_player(player: Node) -> void:
+	player.global_position = _get_spawn_position(player.owner_peer_id)
+	player.velocity = Vector3.ZERO
+	player.respawn_remaining = 0.0
+	player.is_alive = true
+
+func _get_spawn_position(peer_id: int) -> Vector3:
+	var spawn_offsets := [Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
+	var offset: Vector2i = spawn_offsets[(peer_id - 1) % spawn_offsets.size()]
+	return maze.cell_to_world(Vector2i(24, 24) + offset) + Vector3(0, 0.1, 0)
+
+func _maybe_start_round() -> void:
+	if not multiplayer.is_server() or _round_active or _round_finished:
+		return
+	if get_tree().get_nodes_in_group("players").size() < 2:
+		return
+	_round_active = true
+	_round_time_left = ROUND_LENGTH
+	_round_sync_timer = 0.0
+	for player in get_tree().get_nodes_in_group("players"):
+		player.round_active = true
+	_sync_round_state.rpc(_round_active, _round_time_left, _round_finished)
+	_refresh_status("Round started")
+
+@rpc("authority", "call_local", "reliable")
+func _sync_round_state(active: bool, time_left: float, finished: bool) -> void:
+	_round_active = active
+	_round_time_left = time_left
+	_round_finished = finished
+	_update_round_hud()
 
 func _build_lobby_ui() -> void:
 	var canvas := CanvasLayer.new()
@@ -97,16 +204,16 @@ func _spawn_player(data: Variant) -> Node:
 	var player := PLAYER_SCENE.instantiate()
 	player.name = "Player_%d" % peer_id
 	player.owner_peer_id = peer_id
+	player.round_active = _round_active
 	player.set_multiplayer_authority(1, true)
-	var spawn_offsets := [Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
-	var offset: Vector2i = spawn_offsets[(peer_id - 1) % spawn_offsets.size()]
-	player.position = maze.cell_to_world(Vector2i(24, 24) + offset) + Vector3(0, 0.1, 0)
+	player.position = _get_spawn_position(peer_id)
 	return player
 
 func _on_peer_connected(peer_id: int) -> void:
 	if multiplayer.is_server():
 		_spawn_peer(peer_id)
 		_refresh_status("Player %d joined" % peer_id)
+		_maybe_start_round.call_deferred()
 	else:
 		_refresh_player_list.call_deferred()
 
@@ -121,14 +228,17 @@ func _on_peer_disconnected(peer_id: int) -> void:
 
 func _on_player_spawned(_player: Node) -> void:
 	_refresh_player_list.call_deferred()
+	_maybe_start_round.call_deferred()
 
 func _on_player_despawned(_player: Node) -> void:
 	_refresh_player_list.call_deferred()
+	_update_round_hud.call_deferred()
 
 func _on_connected_to_server() -> void:
 	_lobby_panel.hide()
 	_refresh_status("Connected to host")
 	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_update_round_hud()
 
 func _on_connection_failed() -> void:
 	_set_status("Connection failed. Check the host IP and port %d." % GAME_PORT)

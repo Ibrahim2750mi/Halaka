@@ -24,6 +24,7 @@ func _physics_process(delta: float) -> void:
 	if not is_multiplayer_authority():
 		return
 	var active_players := get_tree().get_nodes_in_group("players")
+	active_players = active_players.filter(func(player: Node) -> bool: return player.is_alive)
 	if active_players.is_empty():
 		return
 	if not _initialized:
@@ -59,6 +60,8 @@ func _update_path() -> void:
 	var current_cell: Vector2i = maze.world_to_cell(global_position)
 	var shortest_path: Array[Vector2i] = []
 	for player in get_tree().get_nodes_in_group("players"):
+		if not player.is_alive:
+			continue
 		var target_cell: Vector2i = maze.world_to_cell(player.global_position)
 		var candidate: Array[Vector2i] = maze.find_path(current_cell, target_cell)
 		if not candidate.is_empty() and (shortest_path.is_empty() or candidate.size() < shortest_path.size()):
