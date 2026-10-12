@@ -1,0 +1,76 @@
+extends CharacterBody3D
+## Hunts the player by recomputing shortest routes through the maze's walkable cells.
+
+@export var maze_path: NodePath
+@export var player_path: NodePath
+@export var chase_speed := 2.8
+@export var gravity := 18.0
+@export var repath_interval := 0.55
+
+@onready var maze: Node = get_node(maze_path)
+@onready var player: CharacterBody3D = get_node(player_path)
+
+var _path: Array[Vector2i] = []
+var _path_index := 0
+var _repath_timer := 0.0
+var _run_animation: StringName = &""
+var _animation_player: AnimationPlayer
+
+func _ready() -> void:
+	var start_cell: Vector2i = maze.world_to_cell(player.global_position)
+	var spawn_cell: Vector2i = maze.find_farthest_cell(start_cell)
+	global_position = maze.cell_to_world(spawn_cell)
+	_find_animation_player(self)
+	_select_run_animation()
+	_update_path()
+
+func _physics_process(delta: float) -> void:
+	_repath_timer -= delta
+	if _repath_timer <= 0.0:
+		_update_path()
+		_repath_timer = repath_interval
+	if not is_on_floor():
+		velocity.y -= gravity * delta
+	else:
+		velocity.y = 0.0
+	var move_direction := Vector3.ZERO
+	while _path_index < _path.size():
+		var waypoint: Vector3 = maze.cell_to_world(_path[_path_index])
+		waypoint.y = global_position.y
+		var offset := waypoint - global_position
+		if offset.length() < 0.48:
+			_path_index += 1
+			continue
+		move_direction = offset.normalized()
+		break
+	velocity.x = move_direction.x * chase_speed
+	velocity.z = move_direction.z * chase_speed
+	if move_direction.length_squared() > 0.001:
+		look_at(global_position + Vector3(move_direction.x, 0.0, move_direction.z), Vector3.UP)
+	move_and_slide()
+
+func _update_path() -> void:
+	var current_cell: Vector2i = maze.world_to_cell(global_position)
+	var target_cell: Vector2i = maze.world_to_cell(player.global_position)
+	_path = maze.find_path(current_cell, target_cell)
+	_path_index = 1 if _path.size() > 1 else 0
+
+func _find_animation_player(node: Node) -> void:
+	if node is AnimationPlayer:
+		_animation_player = node
+		return
+	for child in node.get_children():
+		_find_animation_player(child)
+		if _animation_player != null:
+			return
+
+func _select_run_animation() -> void:
+	if _animation_player == null:
+		return
+	for animation_name in _animation_player.get_animation_list():
+		if "run" in String(animation_name).to_lower():
+			_run_animation = animation_name
+			var animation := _animation_player.get_animation(animation_name)
+			animation.loop_mode = Animation.LOOP_LINEAR
+			_animation_player.play(_run_animation)
+			return

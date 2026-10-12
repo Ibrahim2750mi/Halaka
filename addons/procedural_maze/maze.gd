@@ -192,6 +192,81 @@ func _set_open(x: int, y: int) -> void:
 func _is_open(x: int, y: int) -> bool:
 	return x >= 0 and x < size_x and y >= 0 and y < size_y and _open_cells[x][y] == 1
 
+## Converts a world position to the nearest maze cell.
+func world_to_cell(world_position: Vector3) -> Vector2i:
+	var local_position := to_local(world_position)
+	var origin_x := -0.5 * size_x * corridor_width + 0.5 * corridor_width
+	var origin_y := -0.5 * size_y * corridor_width + 0.5 * corridor_width
+	return Vector2i(
+		clampi(roundi((local_position.x - origin_x) / corridor_width), 0, size_x - 1),
+		clampi(roundi((local_position.z - origin_y) / corridor_width), 0, size_y - 1)
+	)
+
+func cell_to_world(cell: Vector2i) -> Vector3:
+	var origin_x := -0.5 * size_x * corridor_width + 0.5 * corridor_width
+	var origin_y := -0.5 * size_y * corridor_width + 0.5 * corridor_width
+	return to_global(Vector3(origin_x + cell.x * corridor_width, 0.0, origin_y + cell.y * corridor_width))
+
+## Breadth-first search over open cells, respecting the maze's interior baffle walls.
+func find_path(start: Vector2i, goal: Vector2i) -> Array[Vector2i]:
+	var empty_path: Array[Vector2i] = []
+	if not _is_open(start.x, start.y) or not _is_open(goal.x, goal.y):
+		return empty_path
+	var queue: Array[Vector2i] = [start]
+	var head := 0
+	var parents: Dictionary = {start: start}
+	var directions: Array[Vector2i] = [Vector2i.RIGHT, Vector2i.LEFT, Vector2i.DOWN, Vector2i.UP]
+	while head < queue.size():
+		var current: Vector2i = queue[head]
+		head += 1
+		if current == goal:
+			break
+		for direction in directions:
+			var next := current + direction
+			if parents.has(next) or not _is_open(next.x, next.y) or not _can_step_between(current, next):
+				continue
+			parents[next] = current
+			queue.append(next)
+	if not parents.has(goal):
+		return empty_path
+	var path: Array[Vector2i] = []
+	var cursor := goal
+	while cursor != start:
+		path.push_front(cursor)
+		cursor = parents[cursor]
+	path.push_front(start)
+	return path
+
+## Returns the most distant reachable open cell, used to place the monster away from spawn.
+func find_farthest_cell(start: Vector2i) -> Vector2i:
+	var queue: Array[Vector2i] = [start]
+	var head := 0
+	var distances: Dictionary = {start: 0}
+	var farthest := start
+	var directions: Array[Vector2i] = [Vector2i.RIGHT, Vector2i.LEFT, Vector2i.DOWN, Vector2i.UP]
+	while head < queue.size():
+		var current: Vector2i = queue[head]
+		head += 1
+		if distances[current] > distances[farthest]:
+			farthest = current
+		for direction in directions:
+			var next := current + direction
+			if distances.has(next) or not _is_open(next.x, next.y) or not _can_step_between(current, next):
+				continue
+			distances[next] = distances[current] + 1
+			queue.append(next)
+	return farthest
+
+func _can_step_between(from: Vector2i, to: Vector2i) -> bool:
+	for baffle in _chamber_baffles:
+		if baffle.axis == "horizontal" and from.x == to.x and mini(from.y, to.y) == baffle.line:
+			if from.x >= baffle.start and from.x <= baffle.end and (from.x < baffle.gap_start or from.x > baffle.gap_end):
+				return false
+		if baffle.axis == "vertical" and from.y == to.y and mini(from.x, to.x) == baffle.line:
+			if from.y >= baffle.start and from.y <= baffle.end and (from.y < baffle.gap_start or from.y > baffle.gap_end):
+				return false
+	return true
+
 func _build_geometry() -> void:
 	var cell_size := corridor_width
 	var origin := Vector3(-0.5 * size_x * cell_size + 0.5 * cell_size, 0.0, -0.5 * size_y * cell_size + 0.5 * cell_size)
