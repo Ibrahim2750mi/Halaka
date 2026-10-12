@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://b8ntw4vc7kgx5"
+path="res://.godot/imported/stairs.obj-5dcd1ee8a125e89a32eb24f3afe41459.mesh"
+
+[deps]
+
+files=["res://.godot/imported/stairs.obj-5dcd1ee8a125e89a32eb24f3afe41459.mesh"]
+
+source_file="res://kenney_modular-cave-kit_1.0/Models/OBJ format/stairs.obj"
+dest_files=["res://.godot/imported/stairs.obj-5dcd1ee8a125e89a32eb24f3afe41459.mesh", "res://.godot/imported/stairs.obj-5dcd1ee8a125e89a32eb24f3afe41459.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false
