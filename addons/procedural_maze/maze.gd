@@ -57,6 +57,7 @@ func generate() -> void:
 	var start := Vector2i(size_x / 2, size_y / 2)
 	var chambers: Array[Vector2i] = [start]
 	_carve_chamber(start, 5.5, 5.0, rng)
+	_add_chamber_baffles(start, 5.5, 5.0, true, true)
 	for room_index in range(7):
 		var center := _pick_chamber_center(chambers, rng)
 		var nearest := chambers[0]
@@ -67,8 +68,8 @@ func generate() -> void:
 		var radius_x := rng.randf_range(4.0, 6.5)
 		var radius_y := rng.randf_range(4.0, 6.5)
 		_carve_chamber(center, radius_x, radius_y, rng)
-		if room_index in [1, 2, 4, 5, 6]:
-			_add_chamber_baffles(center, radius_x, radius_y)
+		if room_index > 0:
+			_add_chamber_baffles(center, radius_x, radius_y, room_index in [2, 4, 6])
 		chambers.append(center)
 
 	# A few broad connecting passages make the cave feel open and give alternate routes.
@@ -80,8 +81,8 @@ func generate() -> void:
 		_carve_passage(chambers[first], chambers[second], rng)
 	_build_geometry()
 
-func _add_chamber_baffles(center: Vector2i, radius_x: float, radius_y: float) -> void:
-	var row_offsets: Array[int] = [-3, 0, 3]
+func _add_chamber_baffles(center: Vector2i, radius_x: float, radius_y: float, add_cross_walls: bool, protect_spawn := false) -> void:
+	var row_offsets: Array[int] = [-4, -2, 0, 2, 4]
 	var baffle_index := 0
 	for row_offset in row_offsets:
 		if abs(float(row_offset)) >= radius_y - 1.0:
@@ -91,12 +92,44 @@ func _add_chamber_baffles(center: Vector2i, radius_x: float, radius_y: float) ->
 		var half_width := max(2, int(floor(radius_x * sqrt(1.0 - row_fraction * row_fraction))) - 1)
 		var min_x := max(1, center.x - half_width)
 		var max_x := min(size_x - 2, center.x + half_width)
-		var gap_width := 1
-		var gap_start: int = center.x + half_width - gap_width if baffle_index % 2 == 0 else center.x - half_width
+		var gap_width := 2 if protect_spawn and row_offset == 0 else 1
+		var gap_start: int
+		if protect_spawn and row_offset == 0:
+			gap_start = center.x - int(floor(float(gap_width) * 0.5))
+		else:
+			gap_start = center.x + half_width - gap_width if baffle_index % 2 == 0 else center.x - half_width
 		_chamber_baffles.append({
-			"row": row,
-			"min_x": min_x,
-			"max_x": max_x,
+			"axis": "horizontal",
+			"line": row,
+			"start": min_x,
+			"end": max_x,
+			"gap_start": gap_start,
+			"gap_end": gap_start + gap_width - 1,
+		})
+		baffle_index += 1
+	if not add_cross_walls:
+		return
+	var column_offsets: Array[int] = [-3, 0, 3]
+	baffle_index = 0
+	for column_offset in column_offsets:
+		if abs(float(column_offset)) >= radius_x - 1.0:
+			continue
+		var column: int = center.x + column_offset
+		var column_fraction := float(column_offset) / radius_x
+		var half_height := max(2, int(floor(radius_y * sqrt(1.0 - column_fraction * column_fraction))) - 1)
+		var min_y := max(1, center.y - half_height)
+		var max_y := min(size_y - 2, center.y + half_height)
+		var gap_width := 2
+		var gap_start: int
+		if protect_spawn and column_offset == 0:
+			gap_start = center.y - int(floor(float(gap_width) * 0.5))
+		else:
+			gap_start = center.y + half_height - gap_width if baffle_index % 2 == 0 else center.y - half_height
+		_chamber_baffles.append({
+			"axis": "vertical",
+			"line": column,
+			"start": min_y,
+			"end": max_y,
 			"gap_start": gap_start,
 			"gap_end": gap_start + gap_width - 1,
 		})
@@ -178,13 +211,18 @@ func _build_geometry() -> void:
 			if not _is_open(x, y + 1):
 				_add_cave_wall("CaveWall_Bottom", center + Vector3(0.0, 0.0, cell_size * 0.5), true, cell_size)
 	for baffle in _chamber_baffles:
-		var row: int = baffle.row
-		for wall_x in range(baffle.min_x, baffle.max_x + 1):
-			if wall_x >= baffle.gap_start and wall_x <= baffle.gap_end:
+		var line: int = baffle.line
+		for index in range(baffle.start, baffle.end + 1):
+			if index >= baffle.gap_start and index <= baffle.gap_end:
 				continue
-			if _is_open(wall_x, row) and _is_open(wall_x, row + 1):
-				var wall_center := origin + Vector3(wall_x * cell_size, 0.0, (row + 0.5) * cell_size)
-				_add_cave_wall("ChamberBaffle", wall_center, true, cell_size)
+			if baffle.axis == "horizontal":
+				if _is_open(index, line) and _is_open(index, line + 1):
+					var wall_center := origin + Vector3(index * cell_size, 0.0, (line + 0.5) * cell_size)
+					_add_cave_wall("ChamberBaffle", wall_center, true, cell_size)
+			else:
+				if _is_open(line, index) and _is_open(line + 1, index):
+					var wall_center := origin + Vector3((line + 0.5) * cell_size, 0.0, index * cell_size)
+					_add_cave_wall("ChamberBaffle", wall_center, false, cell_size)
 
 func _add_floor_visuals(origin: Vector3, cell_size: float) -> void:
 	var floor_root := FLOOR_ASSET.instantiate()
