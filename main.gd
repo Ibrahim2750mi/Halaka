@@ -8,6 +8,7 @@ const RESPAWN_DELAY := 15.0
 const POWERUP_STUN_TIME := 5.0
 const POWERUP_BLIND_TIME := 2.5
 const POWERUP_BARRICADE_TIME := 10.0
+const POWERUP_WALL_TRAVEL_TIME := 3.0
 const POWERUP_HIT_BONUS := 25.0
 const POWERUP_PICKUP_COUNT := 8
 const POWERUP_RANGE := 60.0
@@ -36,6 +37,7 @@ var _hud_label: Label
 var _round_sync_timer := 0.0
 
 func _ready() -> void:
+	_separate_maze_wall_colliders()
 	player_spawner.spawn_function = _spawn_player
 	pickup_spawner.spawn_function = _spawn_powerup
 	barricade_spawner.spawn_function = _spawn_barricade
@@ -109,6 +111,7 @@ func _update_players(delta: float) -> void:
 	for player in get_tree().get_nodes_in_group("players"):
 		player.stun_remaining = maxf(0.0, player.stun_remaining - delta)
 		player.blind_remaining = maxf(0.0, player.blind_remaining - delta)
+		player.wall_travel_remaining = maxf(0.0, player.wall_travel_remaining - delta)
 		if player.is_alive:
 			player.total_alive_time += delta
 			# The point rate rises with this player's own accumulated survival time.
@@ -117,6 +120,7 @@ func _update_players(delta: float) -> void:
 			if _is_caught_by_monster(player):
 				player.is_alive = false
 				player.respawn_remaining = RESPAWN_DELAY
+				player.wall_travel_remaining = 0.0
 				player.velocity = Vector3.ZERO
 		else:
 			player.respawn_remaining = maxf(0.0, player.respawn_remaining - delta)
@@ -138,6 +142,20 @@ func _get_spawn_position(peer_id: int) -> Vector3:
 	var offset: Vector2i = spawn_offsets[(peer_id - 1) % spawn_offsets.size()]
 	return maze.cell_to_world(Vector2i(24, 24) + offset) + Vector3(0, 0.1, 0)
 
+func _separate_maze_wall_colliders() -> void:
+	var wall_body := StaticBody3D.new()
+	wall_body.name = "WallColliders"
+	wall_body.collision_layer = 2
+	wall_body.collision_mask = 1
+	maze.add_child(wall_body)
+	for child in maze.get_children():
+		var shape_node := child as CollisionShape3D
+		if shape_node == null:
+			continue
+		var box_shape := shape_node.shape as BoxShape3D
+		if box_shape != null and box_shape.size.y > 1.0:
+			shape_node.reparent(wall_body, true)
+
 func _maybe_start_round() -> void:
 	if not multiplayer.is_server() or _round_active or _round_finished:
 		return
@@ -157,7 +175,7 @@ func _spawn_round_powerups() -> void:
 	rng.randomize()
 	var start_cell: Vector2i = maze.world_to_cell(_get_spawn_position(1))
 	var used_cells: Dictionary = {}
-	var powerup_types := ["stun", "stun", "stun", "blind", "blind", "blind", "barricade", "barricade"]
+	var powerup_types := ["stun", "stun", "blind", "blind", "barricade", "barricade", "wall_travel", "wall_travel"]
 	powerup_types.shuffle()
 	var spawned := 0
 	for attempt in range(160):
@@ -211,6 +229,10 @@ func use_powerup_for_player(player: Node) -> void:
 		else:
 			_send_powerup_feedback(player, "BLOCKED — no room to place barricade")
 		return
+	if used_powerup == "wall_travel":
+		player.wall_travel_remaining = POWERUP_WALL_TRAVEL_TIME
+		_send_powerup_feedback(player, "WALL TRAVEL — 3 seconds")
+		return
 	if used_powerup != "stun" and used_powerup != "blind":
 		return
 	var origin: Vector3 = player.camera.global_position
@@ -248,7 +270,7 @@ func _can_place_barricade(player: Node, wall_position: Vector3, wall_rotation: V
 	for side_offset in [-0.85, 0.0, 0.85]:
 		var offset: Vector3 = right * side_offset
 		var query := PhysicsRayQueryParameters3D.create(ray_start + offset, wall_position + offset)
-		query.collision_mask = 1
+		query.collision_mask = 3
 		query.exclude = [player.get_rid()]
 		if not get_world_3d().direct_space_state.intersect_ray(query).is_empty():
 			return false

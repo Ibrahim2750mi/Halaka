@@ -37,6 +37,9 @@ properties/8/replication_mode = 1
 properties/9/path = NodePath(".:blind_remaining")
 properties/9/spawn = true
 properties/9/replication_mode = 1
+properties/10/path = NodePath(".:wall_travel_remaining")
+properties/10/spawn = true
+properties/10/replication_mode = 1
 
 [sub_resource type="CapsuleMesh" id="PlayerVisual"]
 radius = 0.35
@@ -58,6 +61,7 @@ emission = Color(1, 0.76, 0.45, 1)
 emission_energy_multiplier = 0.15
 
 [node name="Player" type="CharacterBody3D"]
+collision_mask = 3
 script = ExtResource("1_player")
 
 [node name="CollisionShape3D" type="CollisionShape3D" parent="."]

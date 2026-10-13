@@ -20,6 +20,7 @@ var respawn_remaining := 0.0
 var held_powerup := ""
 var stun_remaining := 0.0
 var blind_remaining := 0.0
+var wall_travel_remaining := 0.0
 var _camera_pitch := 0.0
 var _camera_yaw := 0.0
 var _smoothed_camera_position := Vector3.ZERO
@@ -181,6 +182,8 @@ func _powerup_hud_text() -> String:
 			return "Blind gun  |  1 shot  |  Left click to fire"
 		"barricade":
 			return "Barricade gun  |  1 shot  |  Left click to deploy"
+		"wall_travel":
+			return "Wall travel  |  1 use  |  3 seconds"
 		_:
 			return "Power-up: empty"
 
@@ -223,6 +226,7 @@ func _unhandled_input(event: InputEvent) -> void:
 func _physics_process(delta: float) -> void:
 	if not _network_is_active():
 		return
+	_update_wall_travel_collision()
 	if not round_active or not is_alive or stun_remaining > 0.0:
 		velocity = Vector3.ZERO
 		return
@@ -241,6 +245,10 @@ func _physics_process(delta: float) -> void:
 		if _input_send_timer <= 0.0:
 			_submit_input.rpc_id(1, predicted_input, rotation.y, _camera_pitch, jump_pressed)
 			_input_send_timer = 1.0 / 30.0
+
+func _update_wall_travel_collision() -> void:
+	# Layer 1 keeps the floor solid; layer 2 contains cave walls.
+	collision_mask = 1 if wall_travel_remaining > 0.0 else 3
 
 func _network_is_active() -> bool:
 	if not multiplayer.has_multiplayer_peer():

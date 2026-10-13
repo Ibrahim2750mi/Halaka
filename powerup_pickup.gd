@@ -16,6 +16,9 @@ func _ready() -> void:
 	elif powerup_type == "barricade":
 		material.albedo_color = Color(1.0, 0.58, 0.16)
 		material.emission = Color(1.0, 0.3, 0.04)
+	elif powerup_type == "wall_travel":
+		material.albedo_color = Color(0.2, 1.0, 0.48)
+		material.emission = Color(0.05, 0.9, 0.25)
 	else:
 		material.albedo_color = Color(0.2, 0.85, 1.0)
 		material.emission = Color(0.08, 0.55, 1.0)
