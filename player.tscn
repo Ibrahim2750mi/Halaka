@@ -28,6 +28,15 @@ properties/5/replication_mode = 1
 properties/6/path = NodePath(".:round_active")
 properties/6/spawn = true
 properties/6/replication_mode = 1
+properties/7/path = NodePath(".:held_powerup")
+properties/7/spawn = true
+properties/7/replication_mode = 1
+properties/8/path = NodePath(".:stun_remaining")
+properties/8/spawn = true
+properties/8/replication_mode = 1
+properties/9/path = NodePath(".:blind_remaining")
+properties/9/spawn = true
+properties/9/replication_mode = 1
 
 [sub_resource type="CapsuleMesh" id="PlayerVisual"]
 radius = 0.35

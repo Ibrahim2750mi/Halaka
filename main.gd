@@ -5,11 +5,19 @@ const GAME_PORT := 2456
 const MAX_REMOTE_PLAYERS := 3
 const ROUND_LENGTH := 180.0
 const RESPAWN_DELAY := 15.0
+const POWERUP_STUN_TIME := 5.0
+const POWERUP_BLIND_TIME := 2.5
+const POWERUP_HIT_BONUS := 25.0
+const POWERUP_PICKUP_COUNT := 8
+const POWERUP_RANGE := 60.0
 const PLAYER_SCENE: PackedScene = preload("res://player.tscn")
+const POWERUP_SCENE: PackedScene = preload("res://powerup_pickup.tscn")
 
 @onready var maze: Node = $Maze
 @onready var players: Node3D = $Players
 @onready var player_spawner: MultiplayerSpawner = $Players/MultiplayerSpawner
+@onready var pickups: Node3D = $Pickups
+@onready var pickup_spawner: MultiplayerSpawner = $Pickups/MultiplayerSpawner
 
 var _lobby_panel: PanelContainer
 var _lobby_controls: VBoxContainer
@@ -26,6 +34,7 @@ var _round_sync_timer := 0.0
 
 func _ready() -> void:
 	player_spawner.spawn_function = _spawn_player
+	pickup_spawner.spawn_function = _spawn_powerup
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 	multiplayer.connected_to_server.connect(_on_connected_to_server)
@@ -94,10 +103,13 @@ func _update_round_hud() -> void:
 
 func _update_players(delta: float) -> void:
 	for player in get_tree().get_nodes_in_group("players"):
+		player.stun_remaining = maxf(0.0, player.stun_remaining - delta)
+		player.blind_remaining = maxf(0.0, player.blind_remaining - delta)
 		if player.is_alive:
 			player.total_alive_time += delta
 			# The point rate rises with this player's own accumulated survival time.
 			player.score += delta * (1.0 + player.total_alive_time / 60.0)
+			_try_collect_powerup(player)
 			if _is_caught_by_monster(player):
 				player.is_alive = false
 				player.respawn_remaining = RESPAWN_DELAY
@@ -132,8 +144,94 @@ func _maybe_start_round() -> void:
 	_round_sync_timer = 0.0
 	for player in get_tree().get_nodes_in_group("players"):
 		player.round_active = true
+	_spawn_round_powerups()
 	_sync_round_state.rpc(_round_active, _round_time_left, _round_finished)
 	_refresh_status("Round started")
+
+func _spawn_round_powerups() -> void:
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	var start_cell: Vector2i = maze.world_to_cell(_get_spawn_position(1))
+	var used_cells: Dictionary = {}
+	var powerup_types := ["stun", "stun", "stun", "stun", "blind", "blind", "blind", "blind"]
+	powerup_types.shuffle()
+	var spawned := 0
+	for attempt in range(160):
+		if spawned >= POWERUP_PICKUP_COUNT:
+			break
+		var cell := Vector2i(rng.randi_range(2, maze.size_x - 3), rng.randi_range(2, maze.size_y - 3))
+		if used_cells.has(cell) or not maze._is_open(cell.x, cell.y):
+			continue
+		if cell.distance_to(start_cell) < 7.0 or maze.find_path(start_cell, cell).is_empty():
+			continue
+		used_cells[cell] = true
+		var pickup_position: Vector3 = maze.cell_to_world(cell) + Vector3.UP * 0.65
+		pickup_spawner.spawn({"pickup_id": spawned, "powerup_type": powerup_types[spawned], "position": pickup_position})
+		spawned += 1
+
+func _spawn_powerup(data: Variant) -> Node:
+	var pickup := POWERUP_SCENE.instantiate()
+	pickup.name = "Pickup_%d" % int(data.get("pickup_id", 0))
+	pickup.powerup_type = String(data.get("powerup_type", "stun"))
+	pickup.position = data.get("position", Vector3.ZERO)
+	return pickup
+
+func _try_collect_powerup(player: Node) -> void:
+	if not player.held_powerup.is_empty():
+		return
+	for pickup in pickups.get_children():
+		if pickup.has_method("get_powerup_type") and player.global_position.distance_to(pickup.global_position) <= 1.35:
+			player.held_powerup = pickup.powerup_type
+			pickup.queue_free()
+			return
+
+func use_powerup_for_player(player: Node) -> void:
+	if not multiplayer.is_server() or not _round_active or not player.is_alive or player.held_powerup.is_empty():
+		return
+	var used_powerup: String = player.held_powerup
+	player.held_powerup = ""
+	if used_powerup != "stun" and used_powerup != "blind":
+		return
+	var origin: Vector3 = player.camera.global_position
+	var direction: Vector3 = -player.camera.global_basis.z
+	var query := PhysicsRayQueryParameters3D.create(origin, origin + direction * POWERUP_RANGE)
+	query.exclude = [player.get_rid()]
+	query.collide_with_areas = true
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	var beam_end: Vector3 = hit.get("position", origin + direction * POWERUP_RANGE)
+	var beam_color := Color(0.22, 0.86, 1.0) if used_powerup == "stun" else Color(0.82, 0.3, 1.0)
+	_send_powerup_beam(player, beam_end, beam_color)
+	var target: Object = hit.get("collider") if not hit.is_empty() else null
+	var monster := get_node_or_null("Monster")
+	if used_powerup == "stun" and monster != null and (target == monster or target == monster.get_node_or_null("StunAimHitbox")):
+		monster.stun_remaining = POWERUP_STUN_TIME
+		player.score += POWERUP_HIT_BONUS
+		_send_powerup_feedback(player, "HIT — monster stunned")
+	elif target is Node and target.is_in_group("players") and target != player:
+		if used_powerup == "stun":
+			target.stun_remaining = POWERUP_STUN_TIME
+		else:
+			target.blind_remaining = POWERUP_BLIND_TIME
+		player.score += POWERUP_HIT_BONUS
+		_send_powerup_feedback(player, "HIT — player stunned" if used_powerup == "stun" else "HIT — player blinded")
+	elif target == monster or (monster != null and target == monster.get_node_or_null("StunAimHitbox")):
+		_send_powerup_feedback(player, "MISS — blind gun only affects players")
+	elif target != null:
+		_send_powerup_feedback(player, "BLOCKED — clear line of sight")
+	else:
+		_send_powerup_feedback(player, "MISS — no target in range")
+
+func _send_powerup_feedback(player: Node, message: String) -> void:
+	if player.owner_peer_id == 1:
+		player._show_powerup_feedback(message)
+	else:
+		player._show_powerup_feedback.rpc_id(player.owner_peer_id, message)
+
+func _send_powerup_beam(player: Node, beam_end: Vector3, beam_color: Color) -> void:
+	if player.owner_peer_id == 1:
+		player._show_powerup_beam(beam_end, beam_color)
+	else:
+		player._show_powerup_beam.rpc_id(player.owner_peer_id, beam_end, beam_color)
 
 @rpc("authority", "call_local", "reliable")
 func _sync_round_state(active: bool, time_left: float, finished: bool) -> void:

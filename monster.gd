@@ -6,6 +6,7 @@ extends CharacterBody3D
 @export var chase_speed := 2.8
 @export var gravity := 18.0
 @export var repath_interval := 0.55
+var stun_remaining := 0.0
 
 @onready var maze: Node = get_node(maze_path)
 
@@ -22,6 +23,14 @@ func _ready() -> void:
 
 func _physics_process(delta: float) -> void:
 	if not is_multiplayer_authority():
+		return
+	if stun_remaining > 0.0:
+		stun_remaining = maxf(0.0, stun_remaining - delta)
+		velocity.x = 0.0
+		velocity.z = 0.0
+		if not is_on_floor():
+			velocity.y -= gravity * delta
+		move_and_slide()
 		return
 	var active_players := get_tree().get_nodes_in_group("players")
 	active_players = active_players.filter(func(player: Node) -> bool: return player.is_alive)
