@@ -287,7 +287,7 @@ func _build_lobby_ui() -> void:
 	_lobby_controls = VBoxContainer.new()
 	_info_layout.add_child(_lobby_controls)
 	var title := Label.new()
-	title.text = "CAVE HUNT  |  2–4 PLAYERS"
+	title.text = "HALAKA  |  2–4 PLAYERS"
 	_lobby_controls.add_child(title)
 	var instructions := Label.new()
 	instructions.text = "Host a game or enter the host's LAN address."
