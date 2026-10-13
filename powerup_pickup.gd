@@ -13,6 +13,9 @@ func _ready() -> void:
 	if powerup_type == "blind":
 		material.albedo_color = Color(0.72, 0.25, 1.0)
 		material.emission = Color(0.55, 0.08, 1.0)
+	elif powerup_type == "barricade":
+		material.albedo_color = Color(1.0, 0.58, 0.16)
+		material.emission = Color(1.0, 0.3, 0.04)
 	else:
 		material.albedo_color = Color(0.2, 0.85, 1.0)
 		material.emission = Color(0.08, 0.55, 1.0)

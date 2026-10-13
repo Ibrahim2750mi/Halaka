@@ -7,17 +7,20 @@ const ROUND_LENGTH := 180.0
 const RESPAWN_DELAY := 15.0
 const POWERUP_STUN_TIME := 5.0
 const POWERUP_BLIND_TIME := 2.5
+const POWERUP_BARRICADE_TIME := 10.0
 const POWERUP_HIT_BONUS := 25.0
 const POWERUP_PICKUP_COUNT := 8
 const POWERUP_RANGE := 60.0
 const PLAYER_SCENE: PackedScene = preload("res://player.tscn")
 const POWERUP_SCENE: PackedScene = preload("res://powerup_pickup.tscn")
+const BARRICADE_SCENE: PackedScene = preload("res://barricade.tscn")
 
 @onready var maze: Node = $Maze
 @onready var players: Node3D = $Players
 @onready var player_spawner: MultiplayerSpawner = $Players/MultiplayerSpawner
 @onready var pickups: Node3D = $Pickups
 @onready var pickup_spawner: MultiplayerSpawner = $Pickups/MultiplayerSpawner
+@onready var barricade_spawner: MultiplayerSpawner = $Barricades/MultiplayerSpawner
 
 var _lobby_panel: PanelContainer
 var _lobby_controls: VBoxContainer
@@ -35,6 +38,7 @@ var _round_sync_timer := 0.0
 func _ready() -> void:
 	player_spawner.spawn_function = _spawn_player
 	pickup_spawner.spawn_function = _spawn_powerup
+	barricade_spawner.spawn_function = _spawn_barricade
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 	multiplayer.connected_to_server.connect(_on_connected_to_server)
@@ -153,7 +157,7 @@ func _spawn_round_powerups() -> void:
 	rng.randomize()
 	var start_cell: Vector2i = maze.world_to_cell(_get_spawn_position(1))
 	var used_cells: Dictionary = {}
-	var powerup_types := ["stun", "stun", "stun", "stun", "blind", "blind", "blind", "blind"]
+	var powerup_types := ["stun", "stun", "stun", "blind", "blind", "blind", "barricade", "barricade"]
 	powerup_types.shuffle()
 	var spawned := 0
 	for attempt in range(160):
@@ -176,6 +180,13 @@ func _spawn_powerup(data: Variant) -> Node:
 	pickup.position = data.get("position", Vector3.ZERO)
 	return pickup
 
+func _spawn_barricade(data: Variant) -> Node:
+	var barricade := BARRICADE_SCENE.instantiate()
+	barricade.position = data.get("position", Vector3.ZERO)
+	barricade.rotation = data.get("rotation", Vector3.ZERO)
+	barricade.lifetime = POWERUP_BARRICADE_TIME
+	return barricade
+
 func _try_collect_powerup(player: Node) -> void:
 	if not player.held_powerup.is_empty():
 		return
@@ -190,6 +201,16 @@ func use_powerup_for_player(player: Node) -> void:
 		return
 	var used_powerup: String = player.held_powerup
 	player.held_powerup = ""
+	if used_powerup == "barricade":
+		var barricade_position: Vector3 = player.global_position - player.global_basis.z * 2.4 + Vector3.UP * 1.4
+		var barricade_rotation: Vector3 = Vector3(0.0, player.rotation.y, 0.0)
+		if _can_place_barricade(player, barricade_position, barricade_rotation):
+			barricade_spawner.spawn({"position": barricade_position, "rotation": barricade_rotation})
+			_send_powerup_beam(player, barricade_position, Color(1.0, 0.62, 0.2))
+			_send_powerup_feedback(player, "BARRICADE DEPLOYED — lasts 10 seconds")
+		else:
+			_send_powerup_feedback(player, "BLOCKED — no room to place barricade")
+		return
 	if used_powerup != "stun" and used_powerup != "blind":
 		return
 	var origin: Vector3 = player.camera.global_position
@@ -220,6 +241,18 @@ func use_powerup_for_player(player: Node) -> void:
 		_send_powerup_feedback(player, "BLOCKED — clear line of sight")
 	else:
 		_send_powerup_feedback(player, "MISS — no target in range")
+
+func _can_place_barricade(player: Node, wall_position: Vector3, wall_rotation: Vector3) -> bool:
+	var right := Basis.from_euler(wall_rotation).x
+	var ray_start: Vector3 = player.global_position + Vector3.UP * 1.4
+	for side_offset in [-0.85, 0.0, 0.85]:
+		var offset: Vector3 = right * side_offset
+		var query := PhysicsRayQueryParameters3D.create(ray_start + offset, wall_position + offset)
+		query.collision_mask = 1
+		query.exclude = [player.get_rid()]
+		if not get_world_3d().direct_space_state.intersect_ray(query).is_empty():
+			return false
+	return true
 
 func _send_powerup_feedback(player: Node, message: String) -> void:
 	if player.owner_peer_id == 1:

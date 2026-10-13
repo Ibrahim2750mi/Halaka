@@ -21,6 +21,9 @@ var held_powerup := ""
 var stun_remaining := 0.0
 var blind_remaining := 0.0
 var _camera_pitch := 0.0
+var _camera_yaw := 0.0
+var _smoothed_camera_position := Vector3.ZERO
+var _camera_follow_ready := false
 var _remote_input := Vector2.ZERO
 var _remote_yaw := 0.0
 var _remote_pitch := 0.0
@@ -41,6 +44,9 @@ func _ready() -> void:
 	camera.current = is_local
 	if is_local:
 		camera.make_current()
+		_camera_yaw = rotation.y
+		_smoothed_camera_position = global_position + Vector3.UP * 1.55
+		_camera_follow_ready = true
 	flashlight.visible = true
 	flashlight.position = Vector3(0.0, -0.05, -0.2)
 	flashlight.light_energy = 5.0
@@ -66,6 +72,16 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	var is_local := _is_local_player()
+	if is_local and _camera_follow_ready:
+		var camera_target: Vector3 = global_position + Vector3.UP * 1.55
+		if _smoothed_camera_position.distance_to(camera_target) > 3.0:
+			_smoothed_camera_position = camera_target
+		else:
+			_smoothed_camera_position = _smoothed_camera_position.lerp(camera_target, 1.0 - exp(-24.0 * delta))
+		camera.global_position = _smoothed_camera_position
+		# Restore local yaw after server snapshots so the camera and movement stay aligned.
+		rotation.y = _camera_yaw
+		camera.rotation = Vector3(_camera_pitch, 0.0, 0.0)
 	if is_alive != _last_alive_state:
 		_apply_alive_state(is_local)
 		_last_alive_state = is_alive
@@ -163,6 +179,8 @@ func _powerup_hud_text() -> String:
 			return "Stun gun  |  1 shot  |  Left click to fire"
 		"blind":
 			return "Blind gun  |  1 shot  |  Left click to fire"
+		"barricade":
+			return "Barricade gun  |  1 shot  |  Left click to deploy"
 		_:
 			return "Power-up: empty"
 
@@ -185,7 +203,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	if not is_alive:
 		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
-		rotate_y(-event.relative.x * mouse_sensitivity)
+		var yaw_delta: float = -event.relative.x * mouse_sensitivity
+		rotate_y(yaw_delta)
+		_camera_yaw += yaw_delta
 		_camera_pitch = clampf(_camera_pitch - event.relative.y * mouse_sensitivity, deg_to_rad(-85.0), deg_to_rad(85.0))
 		camera.rotation.x = _camera_pitch
 	elif event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
@@ -268,7 +288,7 @@ func _request_powerup_use_rpc(body_yaw: float, camera_pitch: float) -> void:
 
 func _simulate_movement(delta: float, move_input: Vector2, jump_pressed: bool) -> void:
 	move_input = move_input.normalized()
-	var move_direction := global_basis.x * move_input.x + global_basis.z * move_input.y
+	var move_direction: Vector3 = global_basis.x * move_input.x + global_basis.z * move_input.y
 	velocity.x = move_direction.x * move_speed
 	velocity.z = move_direction.z * move_speed
 	if is_on_floor():
