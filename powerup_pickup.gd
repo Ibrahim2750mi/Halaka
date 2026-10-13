@@ -2,11 +2,14 @@ extends Node3D
 ## Small floating pickup displayed to every player in the round.
 
 var powerup_type := "stun"
+var lifetime := 30.0
 var _phase := 0.0
 @onready var _visual: Node3D = $Visual
 
 func _ready() -> void:
 	_phase = randf_range(0.0, TAU)
+	if multiplayer.is_server():
+		get_tree().create_timer(lifetime).timeout.connect(queue_free)
 	var material := StandardMaterial3D.new()
 	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	material.emission_enabled = true

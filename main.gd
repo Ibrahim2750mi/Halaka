@@ -11,6 +11,9 @@ const POWERUP_BARRICADE_TIME := 10.0
 const POWERUP_WALL_TRAVEL_TIME := 3.0
 const POWERUP_HIT_BONUS := 25.0
 const POWERUP_PICKUP_COUNT := 8
+const POWERUP_RESPAWN_INTERVAL := 4.0
+const POWERUP_PICKUP_LIFETIME_MIN := 25.0
+const POWERUP_PICKUP_LIFETIME_MAX := 40.0
 const POWERUP_RANGE := 60.0
 const PLAYER_SCENE: PackedScene = preload("res://player.tscn")
 const POWERUP_SCENE: PackedScene = preload("res://powerup_pickup.tscn")
@@ -35,6 +38,8 @@ var _round_finished := false
 var _round_time_left := ROUND_LENGTH
 var _hud_label: Label
 var _round_sync_timer := 0.0
+var _powerup_spawn_timer := 0.0
+var _next_pickup_id := 0
 
 func _ready() -> void:
 	_separate_maze_wall_colliders()
@@ -60,6 +65,7 @@ func _process(delta: float) -> void:
 		return
 	_round_time_left = maxf(0.0, _round_time_left - delta)
 	_update_players(delta)
+	_update_powerup_spawning(delta)
 	_round_sync_timer -= delta
 	if _round_sync_timer <= 0.0:
 		_round_sync_timer = 1.0
@@ -164,6 +170,7 @@ func _maybe_start_round() -> void:
 	_round_active = true
 	_round_time_left = ROUND_LENGTH
 	_round_sync_timer = 0.0
+	_powerup_spawn_timer = POWERUP_RESPAWN_INTERVAL
 	for player in get_tree().get_nodes_in_group("players"):
 		player.round_active = true
 	_spawn_round_powerups()
@@ -188,14 +195,78 @@ func _spawn_round_powerups() -> void:
 			continue
 		used_cells[cell] = true
 		var pickup_position: Vector3 = maze.cell_to_world(cell) + Vector3.UP * 0.65
-		pickup_spawner.spawn({"pickup_id": spawned, "powerup_type": powerup_types[spawned], "position": pickup_position})
+		pickup_spawner.spawn({
+			"pickup_id": spawned,
+			"powerup_type": powerup_types[spawned],
+			"position": pickup_position,
+			"lifetime": rng.randf_range(POWERUP_PICKUP_LIFETIME_MIN, POWERUP_PICKUP_LIFETIME_MAX)
+		})
 		spawned += 1
+	_next_pickup_id = spawned
+
+func _update_powerup_spawning(delta: float) -> void:
+	_powerup_spawn_timer -= delta
+	if _powerup_spawn_timer > 0.0:
+		return
+	if _get_active_powerup_count() >= POWERUP_PICKUP_COUNT:
+		_powerup_spawn_timer = POWERUP_RESPAWN_INTERVAL
+		return
+	if _spawn_replacement_powerup():
+		_powerup_spawn_timer = POWERUP_RESPAWN_INTERVAL
+	else:
+		_powerup_spawn_timer = 1.0
+
+func _spawn_replacement_powerup() -> bool:
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	var start_cell: Vector2i = maze.world_to_cell(_get_spawn_position(1))
+	var powerup_types := ["stun", "stun", "blind", "blind", "barricade", "barricade", "wall_travel", "wall_travel"]
+	for attempt in range(160):
+		var cell := Vector2i(rng.randi_range(2, maze.size_x - 3), rng.randi_range(2, maze.size_y - 3))
+		if not maze._is_open(cell.x, cell.y) or cell.distance_to(start_cell) < 7.0:
+			continue
+		if maze.find_path(start_cell, cell).is_empty():
+			continue
+		var pickup_position: Vector3 = maze.cell_to_world(cell) + Vector3.UP * 0.65
+		var too_close := false
+		for pickup in pickups.get_children():
+			if not pickup.has_method("get_powerup_type") or pickup.is_queued_for_deletion():
+				continue
+			if pickup.global_position.distance_to(pickup_position) < 5.0:
+				too_close = true
+				break
+		if too_close:
+			continue
+		for player in get_tree().get_nodes_in_group("players"):
+			if player.global_position.distance_to(pickup_position) < 5.0:
+				too_close = true
+				break
+		if too_close:
+			continue
+		var type_index := rng.randi_range(0, powerup_types.size() - 1)
+		pickup_spawner.spawn({
+			"pickup_id": _next_pickup_id,
+			"powerup_type": powerup_types[type_index],
+			"position": pickup_position,
+			"lifetime": rng.randf_range(POWERUP_PICKUP_LIFETIME_MIN, POWERUP_PICKUP_LIFETIME_MAX)
+		})
+		_next_pickup_id += 1
+		return true
+	return false
+
+func _get_active_powerup_count() -> int:
+	var count := 0
+	for pickup in pickups.get_children():
+		if pickup.has_method("get_powerup_type") and not pickup.is_queued_for_deletion():
+			count += 1
+	return count
 
 func _spawn_powerup(data: Variant) -> Node:
 	var pickup := POWERUP_SCENE.instantiate()
 	pickup.name = "Pickup_%d" % int(data.get("pickup_id", 0))
 	pickup.powerup_type = String(data.get("powerup_type", "stun"))
 	pickup.position = data.get("position", Vector3.ZERO)
+	pickup.lifetime = float(data.get("lifetime", POWERUP_PICKUP_LIFETIME_MIN))
 	return pickup
 
 func _spawn_barricade(data: Variant) -> Node:
