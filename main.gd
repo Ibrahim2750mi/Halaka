@@ -118,6 +118,11 @@ func _update_players(delta: float) -> void:
 		player.stun_remaining = maxf(0.0, player.stun_remaining - delta)
 		player.blind_remaining = maxf(0.0, player.blind_remaining - delta)
 		player.wall_travel_remaining = maxf(0.0, player.wall_travel_remaining - delta)
+		if player.is_alive and maze.to_local(player.global_position).y < -1.0:
+			player.is_alive = false
+			player.respawn_remaining = RESPAWN_DELAY
+			player.wall_travel_remaining = 0.0
+			player.velocity = Vector3.ZERO
 		if player.is_alive:
 			player.total_alive_time += delta
 			# The point rate rises with this player's own accumulated survival time.
