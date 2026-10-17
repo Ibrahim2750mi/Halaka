@@ -204,8 +204,8 @@ func _update_procedural_animation(delta: float) -> void:
 	_set_procedural_bone_rotation("spine.001", Quaternion(Vector3.RIGHT, -0.04 * walk_weight))
 
 	# Rest the hands beside the hips, then swing both arms opposite the legs while running.
-	var left_shoulder_idle := Quaternion(Vector3.BACK, -1.3)
-	var right_shoulder_idle := Quaternion(Vector3.BACK, 1.3)
+	var left_shoulder_idle := Quaternion(Vector3.BACK, -1.15)
+	var right_shoulder_idle := Quaternion(Vector3.BACK, 1.15)
 	_set_procedural_bone_rotation("upper_arm.L", left_shoulder_idle)
 	_set_procedural_bone_rotation("upper_arm.R", right_shoulder_idle)
 	_character_skeleton.force_update_all_bone_transforms()
@@ -217,7 +217,7 @@ func _update_procedural_animation(delta: float) -> void:
 	_character_skeleton.force_update_all_bone_transforms()
 	var left_elbow_axis: Vector3 = _bone_local_axis("forearm.L", side_axis)
 	var right_elbow_axis: Vector3 = _bone_local_axis("forearm.R", side_axis)
-	var elbow_bend: float = -0.75 - 0.1 * walk_weight
+	var elbow_bend: float = -0.35 - 0.1 * walk_weight
 	_set_procedural_bone_rotation("forearm.L", Quaternion(left_elbow_axis, elbow_bend))
 	_set_procedural_bone_rotation("forearm.R", Quaternion(right_elbow_axis, elbow_bend))
 
