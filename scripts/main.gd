@@ -61,6 +61,16 @@ var _start_round_button: Button
 var _ready_status_label: Label
 var _round_hud_layer: CanvasLayer
 var _hud_label: Label
+var _round_complete_layer: CanvasLayer
+var _round_complete_panel: PanelContainer
+var _round_complete_margin: MarginContainer
+var _round_complete_layout: VBoxContainer
+var _round_complete_title: Label
+var _round_complete_rankings: Label
+var _round_complete_status: Label
+var _play_again_button: Button
+var _main_menu_button: Button
+var _round_complete_compact := false
 var _lobby_outer_margin: MarginContainer
 var _lobby_layout: VBoxContainer
 var _lobby_content: HBoxContainer
@@ -93,6 +103,7 @@ func _ready() -> void:
 	_build_lobby_ui()
 	_build_start_ui()
 	_build_round_hud()
+	_build_round_complete_ui()
 	get_viewport().size_changed.connect(_update_ui_for_viewport)
 	_update_ui_for_viewport()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -127,6 +138,7 @@ func _process(delta: float) -> void:
 		_round_finished = true
 		for player in get_tree().get_nodes_in_group("players"):
 			player.round_active = false
+			player.held_powerup = ""
 		_sync_round_state.rpc(_round_active, _round_time_left, _round_finished)
 		_refresh_status("Round over")
 	_update_round_hud()
@@ -178,15 +190,109 @@ func _build_round_hud() -> void:
 	layout.add_child(_hud_label)
 	_update_round_hud()
 
+func _build_round_complete_ui() -> void:
+	_round_complete_layer = CanvasLayer.new()
+	_round_complete_layer.name = "RoundCompleteUI"
+	_round_complete_layer.layer = 8
+	_round_complete_layer.hide()
+	add_child(_round_complete_layer)
+	var shade := ColorRect.new()
+	shade.color = Color(0.008, 0.015, 0.019, 0.82)
+	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_round_complete_layer.add_child(shade)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_round_complete_layer.add_child(center)
+	_round_complete_panel = PanelContainer.new()
+	_round_complete_panel.name = "RoundCompletePanel"
+	_round_complete_panel.custom_minimum_size = Vector2(440, 0)
+	_apply_panel_style(_round_complete_panel, Color(0.035, 0.055, 0.065, 0.98), Color(0.55, 0.68, 0.43, 1.0))
+	center.add_child(_round_complete_panel)
+	_round_complete_margin = MarginContainer.new()
+	_round_complete_margin.add_theme_constant_override("margin_left", 26)
+	_round_complete_margin.add_theme_constant_override("margin_right", 26)
+	_round_complete_margin.add_theme_constant_override("margin_top", 22)
+	_round_complete_margin.add_theme_constant_override("margin_bottom", 22)
+	_round_complete_panel.add_child(_round_complete_margin)
+	_round_complete_layout = VBoxContainer.new()
+	_round_complete_layout.add_theme_constant_override("separation", 10)
+	_round_complete_margin.add_child(_round_complete_layout)
+	_round_complete_title = Label.new()
+	_round_complete_title.text = "ROUND COMPLETE"
+	_round_complete_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_round_complete_title.add_theme_font_size_override("font_size", 30)
+	_round_complete_title.add_theme_color_override("font_color", Color(0.93, 0.94, 0.79))
+	_round_complete_layout.add_child(_round_complete_title)
+	var subtitle := Label.new()
+	subtitle.text = "The maze goes quiet. Here is how your crew did."
+	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	subtitle.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	subtitle.add_theme_color_override("font_color", Color(0.65, 0.75, 0.71))
+	_round_complete_layout.add_child(subtitle)
+	_round_complete_layout.add_child(HSeparator.new())
+	_round_complete_rankings = Label.new()
+	_round_complete_rankings.name = "RoundRankings"
+	_round_complete_rankings.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_round_complete_rankings.add_theme_font_size_override("font_size", 16)
+	_round_complete_rankings.add_theme_color_override("font_color", Color(0.87, 0.9, 0.84))
+	_round_complete_layout.add_child(_round_complete_rankings)
+	_round_complete_status = Label.new()
+	_round_complete_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_round_complete_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_round_complete_status.add_theme_font_size_override("font_size", 12)
+	_round_complete_status.add_theme_color_override("font_color", Color(0.66, 0.79, 0.75))
+	_round_complete_layout.add_child(_round_complete_status)
+	var buttons := HBoxContainer.new()
+	buttons.add_theme_constant_override("separation", 8)
+	_round_complete_layout.add_child(buttons)
+	_play_again_button = Button.new()
+	_play_again_button.text = "PLAY AGAIN"
+	_play_again_button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_play_again_button.custom_minimum_size.y = 40
+	_play_again_button.tooltip_text = "Start a fresh round with everyone still in this game."
+	_play_again_button.pressed.connect(_start_rematch_from_host)
+	buttons.add_child(_play_again_button)
+	_main_menu_button = Button.new()
+	_main_menu_button.text = "MAIN MENU"
+	_main_menu_button.custom_minimum_size = Vector2(112, 40)
+	_main_menu_button.pressed.connect(_return_to_main_menu)
+	buttons.add_child(_main_menu_button)
+	_update_round_complete_ui()
+
+func _update_round_complete_ui() -> void:
+	if _round_complete_layer == null:
+		return
+	var ranked_players := get_tree().get_nodes_in_group("players")
+	ranked_players.sort_custom(func(a: Node, b: Node) -> bool:
+		if not is_equal_approx(float(a.score), float(b.score)):
+			return float(a.score) > float(b.score)
+		return int(a.owner_peer_id) < int(b.owner_peer_id)
+	)
+	var ranking_lines := PackedStringArray()
+	for index in range(ranked_players.size()):
+		var player: Node = ranked_players[index]
+		var character_index := clampi(int(player.character_index), 0, CHARACTER_CATALOG.NAMES.size() - 1)
+		var placement := "1ST" if index == 0 else ("2ND" if index == 1 else ("3RD" if index == 2 else "4TH"))
+		var survived := int(player.total_alive_time)
+		if _round_complete_compact:
+			ranking_lines.append("%s  P%d · %s  |  %d pts  |  %d:%02d" % [placement, player.owner_peer_id, CHARACTER_CATALOG.NAMES[character_index], int(player.score), survived / 60, survived % 60])
+		else:
+			ranking_lines.append("%s   P%d · %s\n          %d points  ·  %d:%02d survived" % [placement, player.owner_peer_id, CHARACTER_CATALOG.NAMES[character_index], int(player.score), survived / 60, survived % 60])
+			if index < ranked_players.size() - 1:
+				ranking_lines.append("")
+	_round_complete_rankings.text = "\n".join(ranking_lines) if not ranking_lines.is_empty() else "No runners were recorded."
+	var is_host := multiplayer.has_multiplayer_peer() and multiplayer.is_server()
+	_play_again_button.disabled = not is_host
+	_play_again_button.tooltip_text = "Start a fresh round with everyone still in this game." if is_host else "Waiting for the host to start another round."
+	_round_complete_status.text = "Host: start another round or return to the main menu." if is_host else "Waiting for the host. You can also return to the main menu."
+
 func _update_round_hud() -> void:
 	if _hud_label == null:
 		return
-	_round_hud_layer.visible = _round_active or _round_finished
+	_round_hud_layer.visible = _round_active
 	var heading := "Waiting for another player..."
 	if _round_active:
 		heading = "Round: %d:%02d" % [int(_round_time_left) / 60, int(_round_time_left) % 60]
-	elif _round_finished:
-		heading = "ROUND OVER"
 	var lines: PackedStringArray = [heading, ""]
 	var active_players := get_tree().get_nodes_in_group("players")
 	active_players.sort_custom(func(a: Node, b: Node) -> bool: return a.owner_peer_id < b.owner_peer_id)
@@ -262,6 +368,9 @@ func _start_round_from_host() -> void:
 	_powerup_spawn_timer = POWERUP_RESPAWN_INTERVAL
 	for player in get_tree().get_nodes_in_group("players"):
 		player.round_active = true
+		player.stun_remaining = 0.0
+		player.blind_remaining = 0.0
+		player.wall_travel_remaining = 0.0
 	_spawn_round_powerups()
 	_sync_round_state.rpc(_round_active, _round_time_left, _round_finished)
 	_refresh_status("Round started")
@@ -306,6 +415,54 @@ func _broadcast_ready_state() -> void:
 		if bool(_ready_players[peer_id]):
 			ready_peer_ids.append(int(peer_id))
 	_sync_ready_state.rpc(ready_peer_ids)
+
+func _start_rematch_from_host() -> void:
+	if not _round_finished or not multiplayer.has_multiplayer_peer():
+		return
+	if not multiplayer.is_server():
+		return
+	_round_active = false
+	_round_finished = false
+	_round_time_left = ROUND_LENGTH
+	_round_sync_timer = 0.0
+	_powerup_spawn_timer = 0.0
+	_next_pickup_id = 0
+	for player in get_tree().get_nodes_in_group("players"):
+		player.round_active = false
+		player.score = 0.0
+		player.total_alive_time = 0.0
+		player.is_alive = true
+		player.respawn_remaining = 0.0
+		player.held_powerup = ""
+		player.stun_remaining = 0.0
+		player.blind_remaining = 0.0
+		player.wall_travel_remaining = 0.0
+		player.velocity = Vector3.ZERO
+		player.global_position = _get_spawn_position(player.owner_peer_id)
+		player.rotation = Vector3.ZERO
+	var barricades := get_node_or_null("Barricades")
+	if barricades != null:
+		for barricade in barricades.get_children():
+			if barricade != barricade_spawner and not barricade.is_queued_for_deletion():
+				barricade_spawner.despawn(barricade)
+	for pickup in pickups.get_children():
+		if pickup != pickup_spawner and not pickup.is_queued_for_deletion():
+			pickup_spawner.despawn(pickup)
+	var monster := get_node_or_null("Monster")
+	if monster != null:
+		monster.call("stop_hunt")
+	for player in get_tree().get_nodes_in_group("players"):
+		player.round_active = true
+	_spawn_round_powerups()
+	_powerup_spawn_timer = POWERUP_RESPAWN_INTERVAL
+	_round_active = true
+	_sync_round_state.rpc(true, ROUND_LENGTH, false)
+	_refresh_status("Rematch started")
+
+func _return_to_main_menu() -> void:
+	if multiplayer.has_multiplayer_peer():
+		multiplayer.multiplayer_peer = null
+	get_tree().reload_current_scene()
 
 @rpc("authority", "call_local", "reliable")
 func _sync_ready_state(ready_peer_ids: PackedInt32Array) -> void:
@@ -505,7 +662,8 @@ func _sync_round_state(active: bool, time_left: float, finished: bool) -> void:
 	_round_time_left = time_left
 	_round_finished = finished
 	_lobby_layer.visible = not active and not finished
-	_round_hud_layer.visible = active or finished
+	_round_hud_layer.visible = active
+	_round_complete_layer.visible = finished
 	_menu_camera.current = not active
 	var monster := get_node_or_null("Monster")
 	if monster != null:
@@ -516,6 +674,8 @@ func _sync_round_state(active: bool, time_left: float, finished: bool) -> void:
 			elif not active:
 				monster.call("stop_hunt")
 	_refresh_lobby_controls()
+	if finished:
+		_update_round_complete_ui()
 	if active:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		var local_player := players.get_node_or_null("Player_%d" % multiplayer.get_unique_id())
@@ -837,6 +997,23 @@ func _update_ui_for_viewport() -> void:
 		_start_margin.add_theme_constant_override("margin_bottom", 16 if start_compact else 28)
 		_start_layout.add_theme_constant_override("separation", 8 if start_compact else 14)
 		_start_title.add_theme_font_size_override("font_size", 40 if start_compact else 56)
+	if _round_complete_panel != null:
+		var result_compact := viewport_size.x < 620.0 or viewport_size.y < 560.0
+		_round_complete_compact = result_compact
+		_round_complete_panel.custom_minimum_size.x = maxf(260.0, minf(500.0, viewport_size.x - 24.0))
+		var result_margin := 12 if result_compact else 26
+		_round_complete_margin.add_theme_constant_override("margin_left", result_margin)
+		_round_complete_margin.add_theme_constant_override("margin_right", result_margin)
+		_round_complete_margin.add_theme_constant_override("margin_top", 12 if result_compact else 22)
+		_round_complete_margin.add_theme_constant_override("margin_bottom", 12 if result_compact else 22)
+		_round_complete_layout.add_theme_constant_override("separation", 6 if result_compact else 10)
+		_round_complete_title.add_theme_font_size_override("font_size", 22 if result_compact else 30)
+		_round_complete_rankings.add_theme_font_size_override("font_size", 13 if result_compact else 16)
+		_round_complete_status.add_theme_font_size_override("font_size", 10 if result_compact else 12)
+		_play_again_button.custom_minimum_size.y = 34 if result_compact else 40
+		_main_menu_button.custom_minimum_size = Vector2(100 if result_compact else 112, 34 if result_compact else 40)
+		if _round_finished:
+			_update_round_complete_ui()
 
 func _show_lobby() -> void:
 	_start_layer.hide()
@@ -1128,10 +1305,12 @@ func _on_peer_disconnected(peer_id: int) -> void:
 func _on_player_spawned(_player: Node) -> void:
 	_refresh_lobby_roster.call_deferred(true)
 	_refresh_lobby_controls.call_deferred()
+	_update_round_complete_ui.call_deferred()
 
 func _on_player_despawned(_player: Node) -> void:
 	_refresh_lobby_roster.call_deferred(true)
 	_update_round_hud.call_deferred()
+	_update_round_complete_ui.call_deferred()
 
 func _on_connected_to_server() -> void:
 	_show_lobby()
@@ -1155,6 +1334,7 @@ func _on_server_disconnected() -> void:
 	if monster != null:
 		monster.set("visible", false)
 	_round_hud_layer.hide()
+	_round_complete_layer.hide()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_roster_signature = ""
 	_refresh_lobby_roster.call_deferred(true)
