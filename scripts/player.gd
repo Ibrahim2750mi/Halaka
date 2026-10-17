@@ -231,8 +231,6 @@ func _set_procedural_bone_rotation(bone_name: String, offset: Quaternion) -> voi
 func _is_local_player() -> bool:
 	if not multiplayer.has_multiplayer_peer():
 		return false
-	if multiplayer.multiplayer_peer.get_connection_status() != MultiplayerPeer.CONNECTION_CONNECTED:
-		return false
 	return multiplayer.get_unique_id() == owner_peer_id
 
 func _apply_alive_state(is_local: bool) -> void:
