@@ -1,6 +1,25 @@
 extends CharacterBody3D
 ## Each player controls only their own avatar. MultiplayerSynchronizer shares its transform.
 
+const CHARACTER_SCENES: Array[PackedScene] = [
+	preload("res://MAN_00/MAN_00_Model.fbx"),
+	preload("res://MAN_01/MAN_01_Model.fbx"),
+	preload("res://WOMAN_00/WOMAN_00_Model.fbx"),
+	preload("res://WOMAN_01/WOMAN_00_Model.fbx"),
+]
+const CHARACTER_ALBEDO_TEXTURES: Array[Texture2D] = [
+	preload("res://MAN_00/MAN_00_Texture.png"),
+	preload("res://MAN_01/MAN_01_Texture.png"),
+	preload("res://WOMAN_00/WOMAN_00_Texture.png"),
+	preload("res://WOMAN_01/WOMAN_00_Texture.png"),
+]
+const CHARACTER_AO_TEXTURES: Array[Texture2D] = [
+	preload("res://MAN_00/MAN_00_AO.png"),
+	preload("res://MAN_01/MAN_01_AO.png"),
+	preload("res://WOMAN_00/WOMAN_00_AO.png"),
+	preload("res://WOMAN_01/WOMAN_00_AO.png"),
+]
+
 @export var move_speed := 5.0
 @export var jump_speed := 4.5
 @export var mouse_sensitivity := 0.0025
@@ -8,6 +27,7 @@ extends CharacterBody3D
 
 @onready var camera: Camera3D = $Camera3D
 @onready var visual: MeshInstance3D = $Visual
+@onready var character_model: Node3D = $CharacterModel
 @onready var collision_shape: CollisionShape3D = $CollisionShape3D
 @onready var flashlight: SpotLight3D = $Camera3D/Flashlight
 @onready var local_beam: MeshInstance3D = $Camera3D/LocalBeam
@@ -39,6 +59,13 @@ var _powerup_feedback := ""
 var _powerup_feedback_time := 0.0
 var _stun_beam_time := 0.0
 var _last_alive_state := true
+var _character_asset_loaded := false
+var _character_skeleton: Skeleton3D
+var _animated_bone_indices: Dictionary = {}
+var _base_bone_rotations: Dictionary = {}
+var _animation_clock := 0.0
+var _animation_speed := 0.0
+var _last_animation_position := Vector3.ZERO
 
 func _ready() -> void:
 	var is_local := _is_local_player()
@@ -56,7 +83,21 @@ func _ready() -> void:
 	flashlight.light_volumetric_fog_energy = 0.0
 	flashlight.shadow_enabled = false
 	local_beam.visible = is_local
-	visual.visible = not is_local
+	var character_index: int = (owner_peer_id - 1) % CHARACTER_SCENES.size()
+	var character_scene: PackedScene = CHARACTER_SCENES[character_index]
+	var character_instance: Node = character_scene.instantiate()
+	character_model.add_child(character_instance)
+	_apply_character_textures(CHARACTER_ALBEDO_TEXTURES[character_index], CHARACTER_AO_TEXTURES[character_index])
+	character_model.scale = Vector3.ONE * 0.9
+	# The imported characters face +Z; turn their front toward Godot's -Z forward.
+	character_model.rotation.y = PI
+	_character_asset_loaded = true
+	var skeleton_nodes: Array[Node] = character_model.find_children("*", "Skeleton3D", true, false)
+	if not skeleton_nodes.is_empty():
+		_character_skeleton = skeleton_nodes[0] as Skeleton3D
+	_cache_animation_bones()
+	_last_animation_position = global_position
+	visual.visible = not is_local and not _character_asset_loaded
 	var player_colors: Array[Color] = [Color(0.22, 0.75, 0.95), Color(0.96, 0.42, 0.24), Color(0.56, 0.9, 0.38), Color(0.86, 0.55, 0.96)]
 	var player_material := StandardMaterial3D.new()
 	player_material.albedo_color = player_colors[(owner_peer_id - 1) % player_colors.size()]
@@ -73,6 +114,7 @@ func _ready() -> void:
 
 func _process(delta: float) -> void:
 	var is_local := _is_local_player()
+	_update_procedural_animation(delta)
 	if is_local and _camera_follow_ready:
 		var camera_target: Vector3 = global_position + Vector3.UP * 1.55
 		if _smoothed_camera_position.distance_to(camera_target) > 3.0:
@@ -106,6 +148,97 @@ func _process(delta: float) -> void:
 		beam_material.emission_energy_multiplier = 2.0 * fade
 		_stun_beam.visible = _stun_beam_time > 0.0
 
+func _cache_animation_bones() -> void:
+	if _character_skeleton == null:
+		return
+	for bone_name in ["thigh.L", "thigh.R", "shin.L", "shin.R", "upper_arm.L", "upper_arm.R", "forearm.L", "forearm.R", "spine.001"]:
+		var bone_index: int = _character_skeleton.find_bone(bone_name)
+		if bone_index >= 0:
+			_animated_bone_indices[bone_name] = bone_index
+			_base_bone_rotations[bone_name] = _character_skeleton.get_bone_pose_rotation(bone_index)
+
+func _apply_character_textures(albedo_texture: Texture2D, ao_texture: Texture2D) -> void:
+	var mesh_nodes: Array[Node] = character_model.find_children("*", "MeshInstance3D", true, false)
+	for node in mesh_nodes:
+		var mesh_instance := node as MeshInstance3D
+		if mesh_instance.mesh == null:
+			continue
+		for surface_index in range(mesh_instance.mesh.get_surface_count()):
+			var source_material: Material = mesh_instance.get_active_material(surface_index)
+			var character_material := StandardMaterial3D.new()
+			if source_material is StandardMaterial3D:
+				character_material = (source_material as StandardMaterial3D).duplicate() as StandardMaterial3D
+			character_material.albedo_texture = albedo_texture
+			character_material.ao_enabled = true
+			character_material.ao_texture = ao_texture
+			character_material.ao_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_RED
+			mesh_instance.set_surface_override_material(surface_index, character_material)
+
+func _update_procedural_animation(delta: float) -> void:
+	if not _character_asset_loaded or _character_skeleton == null:
+		return
+	var safe_delta: float = maxf(delta, 0.001)
+	var position_delta: Vector3 = global_position - _last_animation_position
+	_last_animation_position = global_position
+	var measured_speed: float = Vector2(position_delta.x, position_delta.z).length() / safe_delta
+	measured_speed = minf(measured_speed, maxf(move_speed, 0.1) * 1.25)
+	var speed_blend: float = 1.0 - exp(-12.0 * safe_delta)
+	_animation_speed = lerpf(_animation_speed, measured_speed, speed_blend)
+	var walk_weight: float = clampf((_animation_speed - 0.18) / maxf(move_speed * 0.72, 0.1), 0.0, 1.0) if is_alive else 0.0
+	if not is_alive:
+		_animation_speed = 0.0
+	_animation_clock += safe_delta
+	var gait_phase: float = _animation_clock * TAU * 1.8
+	var leg_cycle: float = sin(gait_phase)
+	var leg_swing: float = leg_cycle * 0.42 * walk_weight
+	var arm_swing: float = sin(gait_phase + PI) * 0.62 * walk_weight
+	character_model.position.y = sin(_animation_clock * 2.2) * 0.008 + maxf(0.0, sin(gait_phase * 2.0)) * 0.045 * walk_weight
+	character_model.rotation.z = sin(gait_phase) * 0.025 * walk_weight
+
+	# The imported T-pose bones have their own rest axes. Apply offsets after each rest rotation.
+	_set_procedural_bone_rotation("thigh.L", Quaternion(Vector3.RIGHT, leg_swing))
+	_set_procedural_bone_rotation("thigh.R", Quaternion(Vector3.RIGHT, -leg_swing))
+	_set_procedural_bone_rotation("shin.L", Quaternion(Vector3.RIGHT, maxf(0.0, -leg_cycle) * 0.65 * walk_weight))
+	_set_procedural_bone_rotation("shin.R", Quaternion(Vector3.RIGHT, maxf(0.0, leg_cycle) * 0.65 * walk_weight))
+	_set_procedural_bone_rotation("spine.001", Quaternion(Vector3.RIGHT, -0.04 * walk_weight))
+
+	# Rest the hands beside the hips, then swing both arms opposite the legs while running.
+	var left_shoulder_idle := Quaternion(Vector3.BACK, -1.3)
+	var right_shoulder_idle := Quaternion(Vector3.BACK, 1.3)
+	_set_procedural_bone_rotation("upper_arm.L", left_shoulder_idle)
+	_set_procedural_bone_rotation("upper_arm.R", right_shoulder_idle)
+	_character_skeleton.force_update_all_bone_transforms()
+	var side_axis: Vector3 = _model_right_in_skeleton_space()
+	var left_arm_axis: Vector3 = _bone_local_axis("upper_arm.L", side_axis)
+	var right_arm_axis: Vector3 = _bone_local_axis("upper_arm.R", side_axis)
+	_set_procedural_bone_rotation("upper_arm.L", left_shoulder_idle * Quaternion(left_arm_axis, arm_swing))
+	_set_procedural_bone_rotation("upper_arm.R", right_shoulder_idle * Quaternion(right_arm_axis, -arm_swing))
+	_character_skeleton.force_update_all_bone_transforms()
+	var left_elbow_axis: Vector3 = _bone_local_axis("forearm.L", side_axis)
+	var right_elbow_axis: Vector3 = _bone_local_axis("forearm.R", side_axis)
+	var elbow_bend: float = -0.75 - 0.1 * walk_weight
+	_set_procedural_bone_rotation("forearm.L", Quaternion(left_elbow_axis, elbow_bend))
+	_set_procedural_bone_rotation("forearm.R", Quaternion(right_elbow_axis, elbow_bend))
+
+func _model_right_in_skeleton_space() -> Vector3:
+	var model_right_global: Vector3 = character_model.global_basis.x.normalized()
+	var skeleton_basis: Basis = _character_skeleton.global_basis.orthonormalized()
+	return (skeleton_basis.inverse() * model_right_global).normalized()
+
+func _bone_local_axis(bone_name: String, skeleton_axis: Vector3) -> Vector3:
+	var bone_index: int = int(_animated_bone_indices.get(bone_name, -1))
+	if bone_index < 0:
+		return Vector3.RIGHT
+	var bone_pose: Transform3D = _character_skeleton.get_bone_global_pose(bone_index)
+	return (bone_pose.basis.orthonormalized().inverse() * skeleton_axis).normalized()
+
+func _set_procedural_bone_rotation(bone_name: String, offset: Quaternion) -> void:
+	if _character_skeleton == null or not _animated_bone_indices.has(bone_name):
+		return
+	var bone_index: int = int(_animated_bone_indices[bone_name])
+	var base_rotation: Quaternion = _base_bone_rotations[bone_name]
+	_character_skeleton.set_bone_pose_rotation(bone_index, base_rotation * offset)
+
 func _is_local_player() -> bool:
 	if not multiplayer.has_multiplayer_peer():
 		return false
@@ -114,7 +247,8 @@ func _is_local_player() -> bool:
 	return multiplayer.get_unique_id() == owner_peer_id
 
 func _apply_alive_state(is_local: bool) -> void:
-	visual.visible = not is_local and is_alive
+	visual.visible = not is_local and is_alive and not _character_asset_loaded
+	character_model.visible = not is_local and is_alive and _character_asset_loaded
 	camera.current = is_local
 	collision_shape.set_deferred("disabled", not is_alive)
 	if not is_alive:
