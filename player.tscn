@@ -40,6 +40,9 @@ properties/9/replication_mode = 1
 properties/10/path = NodePath(".:wall_travel_remaining")
 properties/10/spawn = true
 properties/10/replication_mode = 1
+properties/11/path = NodePath(".:character_index")
+properties/11/spawn = true
+properties/11/replication_mode = 1
 
 [sub_resource type="CapsuleMesh" id="PlayerVisual"]
 radius = 0.35

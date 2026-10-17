@@ -32,6 +32,7 @@ const CHARACTER_AO_TEXTURES: Array[Texture2D] = [
 @onready var flashlight: SpotLight3D = $Camera3D/Flashlight
 @onready var local_beam: MeshInstance3D = $Camera3D/LocalBeam
 var owner_peer_id := 1
+var character_index := 0
 var round_active := false
 var is_alive := true
 var score := 0.0
@@ -83,12 +84,12 @@ func _ready() -> void:
 	flashlight.light_volumetric_fog_energy = 0.0
 	flashlight.shadow_enabled = false
 	local_beam.visible = is_local
-	var character_index: int = (owner_peer_id - 1) % CHARACTER_SCENES.size()
+	character_index = clampi(character_index, 0, CHARACTER_SCENES.size() - 1)
 	var character_scene: PackedScene = CHARACTER_SCENES[character_index]
 	var character_instance: Node = character_scene.instantiate()
 	character_model.add_child(character_instance)
 	_apply_character_textures(CHARACTER_ALBEDO_TEXTURES[character_index], CHARACTER_AO_TEXTURES[character_index])
-	character_model.scale = Vector3.ONE * 0.9
+	character_model.scale = Vector3.ONE
 	# The imported characters face +Z; turn their front toward Godot's -Z forward.
 	character_model.rotation.y = PI
 	_character_asset_loaded = true
@@ -100,7 +101,7 @@ func _ready() -> void:
 	visual.visible = not is_local and not _character_asset_loaded
 	var player_colors: Array[Color] = [Color(0.22, 0.75, 0.95), Color(0.96, 0.42, 0.24), Color(0.56, 0.9, 0.38), Color(0.86, 0.55, 0.96)]
 	var player_material := StandardMaterial3D.new()
-	player_material.albedo_color = player_colors[(owner_peer_id - 1) % player_colors.size()]
+	player_material.albedo_color = player_colors[character_index % player_colors.size()]
 	visual.material_override = player_material
 	_last_alive_state = is_alive
 	_apply_alive_state(is_local)

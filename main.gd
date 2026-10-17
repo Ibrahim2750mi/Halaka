@@ -437,14 +437,31 @@ func _join_game() -> void:
 	_set_status("Connecting to %s:%d..." % [address, GAME_PORT])
 
 func _spawn_peer(peer_id: int) -> void:
-	if multiplayer.is_server():
-		player_spawner.spawn({"peer_id": peer_id})
+	if not multiplayer.is_server() or players.has_node("Player_%d" % peer_id):
+		return
+	var character_index: int = _get_available_character_index()
+	if character_index < 0:
+		return
+	player_spawner.spawn({"peer_id": peer_id, "character_index": character_index})
+
+func _get_available_character_index() -> int:
+	var used_character_indices: Dictionary = {}
+	for player in get_tree().get_nodes_in_group("players"):
+		var assigned_index: Variant = player.get("character_index")
+		if assigned_index != null:
+			used_character_indices[int(assigned_index)] = true
+	for index in range(4):
+		if not used_character_indices.has(index):
+			return index
+	return -1
 
 func _spawn_player(data: Variant) -> Node:
 	var peer_id := int(data.get("peer_id", 1))
+	var character_index := clampi(int(data.get("character_index", 0)), 0, 3)
 	var player := PLAYER_SCENE.instantiate()
 	player.name = "Player_%d" % peer_id
 	player.owner_peer_id = peer_id
+	player.character_index = character_index
 	player.round_active = _round_active
 	player.set_multiplayer_authority(1, true)
 	player.position = _get_spawn_position(peer_id)
