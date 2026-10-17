@@ -7,6 +7,7 @@ extends CharacterBody3D
 @export var gravity := 18.0
 @export var repath_interval := 0.55
 var stun_remaining := 0.0
+var round_active := false
 
 @onready var maze: Node = get_node(maze_path)
 
@@ -22,7 +23,7 @@ func _ready() -> void:
 	_select_run_animation()
 
 func _physics_process(delta: float) -> void:
-	if not is_multiplayer_authority():
+	if not is_multiplayer_authority() or not round_active:
 		return
 	if stun_remaining > 0.0:
 		stun_remaining = maxf(0.0, stun_remaining - delta)
@@ -64,6 +65,27 @@ func _physics_process(delta: float) -> void:
 	if move_direction.length_squared() > 0.001:
 		look_at(global_position + Vector3(move_direction.x, 0.0, move_direction.z), Vector3.UP)
 	move_and_slide()
+
+func start_hunt() -> void:
+	if not multiplayer.is_server():
+		return
+	var active_players := get_tree().get_nodes_in_group("players")
+	active_players = active_players.filter(func(player: Node) -> bool: return player.is_alive)
+	if active_players.is_empty():
+		return
+	var start_cell: Vector2i = maze.world_to_cell(active_players[0].global_position)
+	global_position = maze.cell_to_world(maze.find_farthest_cell(start_cell))
+	velocity = Vector3.ZERO
+	_initialized = true
+	_repath_timer = 0.0
+	_update_path()
+	round_active = true
+	visible = true
+
+func stop_hunt() -> void:
+	round_active = false
+	velocity = Vector3.ZERO
+	visible = false
 
 func _update_path() -> void:
 	var current_cell: Vector2i = maze.world_to_cell(global_position)

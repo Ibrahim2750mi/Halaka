@@ -5132,7 +5132,7 @@ light_energy = 0.18
 shadow_enabled = true
 
 [node name="Monster" type="CharacterBody3D" parent="." unique_id=367997033]
-visible = true
+visible = false
 collision_mask = 3
 script = ExtResource("3_monster")
 maze_path = NodePath("../Maze")

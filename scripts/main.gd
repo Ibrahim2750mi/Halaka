@@ -55,8 +55,24 @@ var _status_message := "Waiting for a host."
 var _round_active := false
 var _round_finished := false
 var _round_time_left := ROUND_LENGTH
+var _ready_players: Dictionary = {}
+var _ready_button: Button
+var _start_round_button: Button
+var _ready_status_label: Label
 var _round_hud_layer: CanvasLayer
 var _hud_label: Label
+var _lobby_outer_margin: MarginContainer
+var _lobby_layout: VBoxContainer
+var _lobby_content: HBoxContainer
+var _lobby_side_column: VBoxContainer
+var _lobby_controls_hint: Label
+var _start_panel: PanelContainer
+var _start_margin: MarginContainer
+var _start_layout: VBoxContainer
+var _start_title: Label
+var _lobby_compact := false
+var _lobby_tight := false
+var _roster_card_height := 74.0
 var _round_sync_timer := 0.0
 var _powerup_spawn_timer := 0.0
 var _next_pickup_id := 0
@@ -77,6 +93,8 @@ func _ready() -> void:
 	_build_lobby_ui()
 	_build_start_ui()
 	_build_round_hud()
+	get_viewport().size_changed.connect(_update_ui_for_viewport)
+	_update_ui_for_viewport()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 func _process(delta: float) -> void:
@@ -233,10 +251,10 @@ func _separate_maze_wall_colliders() -> void:
 		if box_shape != null and box_shape.size.y > 1.0:
 			shape_node.reparent(wall_body, true)
 
-func _maybe_start_round() -> void:
-	if not multiplayer.is_server() or _round_active or _round_finished:
+func _start_round_from_host() -> void:
+	if not multiplayer.has_multiplayer_peer() or not multiplayer.is_server() or _round_active or _round_finished:
 		return
-	if get_tree().get_nodes_in_group("players").size() < 2:
+	if not _all_players_ready():
 		return
 	_round_active = true
 	_round_time_left = ROUND_LENGTH
@@ -247,6 +265,57 @@ func _maybe_start_round() -> void:
 	_spawn_round_powerups()
 	_sync_round_state.rpc(_round_active, _round_time_left, _round_finished)
 	_refresh_status("Round started")
+
+func _all_players_ready() -> bool:
+	var active_players := get_tree().get_nodes_in_group("players")
+	if active_players.size() < 2:
+		return false
+	for player in active_players:
+		if not bool(_ready_players.get(player.owner_peer_id, false)):
+			return false
+	return true
+
+func _toggle_ready() -> void:
+	if not multiplayer.has_multiplayer_peer() or _round_active or _round_finished:
+		return
+	var peer_id := multiplayer.get_unique_id()
+	var new_ready_state := not bool(_ready_players.get(peer_id, false))
+	if multiplayer.is_server():
+		_set_peer_ready(peer_id, new_ready_state)
+	else:
+		_submit_ready.rpc_id(1, new_ready_state)
+
+@rpc("any_peer", "call_remote", "reliable")
+func _submit_ready(ready: bool) -> void:
+	if not multiplayer.is_server() or _round_active or _round_finished:
+		return
+	var peer_id := multiplayer.get_remote_sender_id()
+	if peer_id <= 0 or not players.has_node("Player_%d" % peer_id):
+		return
+	_set_peer_ready(peer_id, ready)
+
+func _set_peer_ready(peer_id: int, ready: bool) -> void:
+	if not players.has_node("Player_%d" % peer_id):
+		return
+	_ready_players[peer_id] = ready
+	_broadcast_ready_state()
+
+func _broadcast_ready_state() -> void:
+	var ready_peer_ids := PackedInt32Array()
+	for peer_id in _ready_players:
+		if bool(_ready_players[peer_id]):
+			ready_peer_ids.append(int(peer_id))
+	_sync_ready_state.rpc(ready_peer_ids)
+
+@rpc("authority", "call_local", "reliable")
+func _sync_ready_state(ready_peer_ids: PackedInt32Array) -> void:
+	var next_ready_players: Dictionary = {}
+	for peer_id in ready_peer_ids:
+		next_ready_players[int(peer_id)] = true
+	_ready_players = next_ready_players
+	_roster_signature = ""
+	_refresh_lobby_roster.call_deferred(true)
+	_refresh_lobby_controls.call_deferred()
 
 func _spawn_round_powerups() -> void:
 	var rng := RandomNumberGenerator.new()
@@ -438,6 +507,15 @@ func _sync_round_state(active: bool, time_left: float, finished: bool) -> void:
 	_lobby_layer.visible = not active and not finished
 	_round_hud_layer.visible = active or finished
 	_menu_camera.current = not active
+	var monster := get_node_or_null("Monster")
+	if monster != null:
+		monster.set("visible", active)
+		if multiplayer.is_server():
+			if active and not bool(monster.get("round_active")):
+				monster.call("start_hunt")
+			elif not active:
+				monster.call("stop_hunt")
+	_refresh_lobby_controls()
 	if active:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 		var local_player := players.get_node_or_null("Player_%d" % multiplayer.get_unique_id())
@@ -467,19 +545,19 @@ func _build_lobby_ui() -> void:
 	_lobby_panel.offset_bottom = -22
 	_apply_panel_style(_lobby_panel, Color(0.045, 0.065, 0.075, 0.78), Color(0.27, 0.42, 0.43, 1.0))
 	_lobby_layer.add_child(_lobby_panel)
-	var outer_margin := MarginContainer.new()
-	outer_margin.add_theme_constant_override("margin_left", 22)
-	outer_margin.add_theme_constant_override("margin_right", 22)
-	outer_margin.add_theme_constant_override("margin_top", 17)
-	outer_margin.add_theme_constant_override("margin_bottom", 17)
-	_lobby_panel.add_child(outer_margin)
-	var layout := VBoxContainer.new()
-	layout.add_theme_constant_override("separation", 14)
-	outer_margin.add_child(layout)
+	_lobby_outer_margin = MarginContainer.new()
+	_lobby_outer_margin.add_theme_constant_override("margin_left", 22)
+	_lobby_outer_margin.add_theme_constant_override("margin_right", 22)
+	_lobby_outer_margin.add_theme_constant_override("margin_top", 17)
+	_lobby_outer_margin.add_theme_constant_override("margin_bottom", 17)
+	_lobby_panel.add_child(_lobby_outer_margin)
+	_lobby_layout = VBoxContainer.new()
+	_lobby_layout.add_theme_constant_override("separation", 14)
+	_lobby_outer_margin.add_child(_lobby_layout)
 
 	var header := HBoxContainer.new()
 	header.add_theme_constant_override("separation", 18)
-	layout.add_child(header)
+	_lobby_layout.add_child(header)
 	var title := Label.new()
 	title.text = "HALAKA"
 	title.add_theme_font_size_override("font_size", 30)
@@ -491,17 +569,37 @@ func _build_lobby_ui() -> void:
 	subtitle.add_theme_font_size_override("font_size", 13)
 	subtitle.add_theme_color_override("font_color", Color(0.54, 0.73, 0.70))
 	header.add_child(subtitle)
-	layout.add_child(HSeparator.new())
+	var ready_row := HBoxContainer.new()
+	ready_row.add_theme_constant_override("separation", 10)
+	_lobby_layout.add_child(ready_row)
+	_ready_status_label = Label.new()
+	_ready_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_ready_status_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_ready_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_ready_status_label.add_theme_color_override("font_color", Color(0.72, 0.82, 0.75))
+	ready_row.add_child(_ready_status_label)
+	_ready_button = Button.new()
+	_ready_button.text = "READY UP"
+	_ready_button.custom_minimum_size = Vector2(130, 42)
+	_ready_button.pressed.connect(_toggle_ready)
+	ready_row.add_child(_ready_button)
+	_start_round_button = Button.new()
+	_start_round_button.text = "START ROUND"
+	_start_round_button.custom_minimum_size = Vector2(150, 42)
+	_start_round_button.tooltip_text = "The host can start after everyone is ready."
+	_start_round_button.pressed.connect(_start_round_from_host)
+	ready_row.add_child(_start_round_button)
+	_lobby_layout.add_child(HSeparator.new())
 
-	var content := HBoxContainer.new()
-	content.add_theme_constant_override("separation", 18)
-	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	layout.add_child(content)
+	_lobby_content = HBoxContainer.new()
+	_lobby_content.add_theme_constant_override("separation", 18)
+	_lobby_content.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_lobby_layout.add_child(_lobby_content)
 	var map_panel := PanelContainer.new()
 	map_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	map_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_apply_panel_style(map_panel, Color(0.025, 0.04, 0.047, 0.76), Color(0.16, 0.27, 0.29, 1.0))
-	content.add_child(map_panel)
+	_lobby_content.add_child(map_panel)
 	var map_margin := MarginContainer.new()
 	map_margin.add_theme_constant_override("margin_left", 12)
 	map_margin.add_theme_constant_override("margin_right", 12)
@@ -535,14 +633,14 @@ func _build_lobby_ui() -> void:
 	_add_map_legend_item(legend, Color("#76d8c0"), "SURVIVOR SPAWN")
 	_add_map_legend_item(legend, Color("#db6c4d"), "HUNTER START")
 
-	var side_column := VBoxContainer.new()
-	side_column.custom_minimum_size.x = 330
-	side_column.size_flags_horizontal = Control.SIZE_FILL
-	side_column.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	side_column.add_theme_constant_override("separation", 10)
-	content.add_child(side_column)
+	_lobby_side_column = VBoxContainer.new()
+	_lobby_side_column.custom_minimum_size.x = 330
+	_lobby_side_column.size_flags_horizontal = Control.SIZE_FILL
+	_lobby_side_column.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_lobby_side_column.add_theme_constant_override("separation", 10)
+	_lobby_content.add_child(_lobby_side_column)
 	var roster_heading := HBoxContainer.new()
-	side_column.add_child(roster_heading)
+	_lobby_side_column.add_child(roster_heading)
 	var roster_title := Label.new()
 	roster_title.text = "RUNNERS"
 	roster_title.add_theme_font_size_override("font_size", 16)
@@ -557,17 +655,17 @@ func _build_lobby_ui() -> void:
 	roster_heading.add_child(count_label)
 	_roster_container = VBoxContainer.new()
 	_roster_container.add_theme_constant_override("separation", 6)
-	side_column.add_child(_roster_container)
+	_lobby_side_column.add_child(_roster_container)
 	var roster_footer := Label.new()
 	roster_footer.text = "Characters are assigned at random when players join."
 	roster_footer.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	roster_footer.add_theme_font_size_override("font_size", 11)
 	roster_footer.add_theme_color_override("font_color", Color(0.5, 0.62, 0.63))
-	side_column.add_child(roster_footer)
+	_lobby_side_column.add_child(roster_footer)
 	var tip_panel := PanelContainer.new()
 	tip_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_apply_panel_style(tip_panel, Color(0.11, 0.14, 0.13, 0.88), Color(0.48, 0.5, 0.3, 0.85))
-	side_column.add_child(tip_panel)
+	_lobby_side_column.add_child(tip_panel)
 	var tip_margin := MarginContainer.new()
 	tip_margin.add_theme_constant_override("margin_left", 13)
 	tip_margin.add_theme_constant_override("margin_right", 13)
@@ -598,11 +696,12 @@ func _build_lobby_ui() -> void:
 	controls_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	controls_hint.add_theme_font_size_override("font_size", 10)
 	controls_hint.add_theme_color_override("font_color", Color(0.55, 0.68, 0.66))
-	layout.add_child(controls_hint)
-	layout.add_child(HSeparator.new())
+	_lobby_controls_hint = controls_hint
+	_lobby_layout.add_child(_lobby_controls_hint)
+	_lobby_layout.add_child(HSeparator.new())
 	var footer := HBoxContainer.new()
-	footer.add_theme_constant_override("separation", 12)
-	layout.add_child(footer)
+	footer.add_theme_constant_override("separation", 8)
+	_lobby_layout.add_child(footer)
 	_lobby_status_label = Label.new()
 	_lobby_status_label.text = _status_message
 	_lobby_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -613,6 +712,7 @@ func _build_lobby_ui() -> void:
 	_refresh_lobby_roster(true)
 	_render_status()
 	_lobby_layer.hide()
+	_refresh_lobby_controls()
 
 func _build_start_ui() -> void:
 	_start_layer = CanvasLayer.new()
@@ -626,48 +726,48 @@ func _build_start_ui() -> void:
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	_start_layer.add_child(center)
-	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(480, 0)
-	_apply_panel_style(panel, Color(0.025, 0.04, 0.048, 0.86), Color(0.3, 0.47, 0.46, 1.0))
-	center.add_child(panel)
-	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 34)
-	margin.add_theme_constant_override("margin_right", 34)
-	margin.add_theme_constant_override("margin_top", 30)
-	margin.add_theme_constant_override("margin_bottom", 28)
-	panel.add_child(margin)
-	var layout := VBoxContainer.new()
-	layout.add_theme_constant_override("separation", 14)
-	margin.add_child(layout)
-	var title := Label.new()
-	title.text = "HALAKA"
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 56)
-	title.add_theme_color_override("font_color", Color(0.91, 0.96, 0.91))
-	layout.add_child(title)
+	_start_panel = PanelContainer.new()
+	_start_panel.custom_minimum_size = Vector2(480, 0)
+	_apply_panel_style(_start_panel, Color(0.025, 0.04, 0.048, 0.86), Color(0.3, 0.47, 0.46, 1.0))
+	center.add_child(_start_panel)
+	_start_margin = MarginContainer.new()
+	_start_margin.add_theme_constant_override("margin_left", 34)
+	_start_margin.add_theme_constant_override("margin_right", 34)
+	_start_margin.add_theme_constant_override("margin_top", 30)
+	_start_margin.add_theme_constant_override("margin_bottom", 28)
+	_start_panel.add_child(_start_margin)
+	_start_layout = VBoxContainer.new()
+	_start_layout.add_theme_constant_override("separation", 14)
+	_start_margin.add_child(_start_layout)
+	_start_title = Label.new()
+	_start_title.text = "HALAKA"
+	_start_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_start_title.add_theme_font_size_override("font_size", 56)
+	_start_title.add_theme_color_override("font_color", Color(0.91, 0.96, 0.91))
+	_start_layout.add_child(_start_title)
 	var subtitle := Label.new()
 	subtitle.text = "A CAVE RUN FOR 2–4 SURVIVORS"
 	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	subtitle.add_theme_font_size_override("font_size", 14)
 	subtitle.add_theme_color_override("font_color", Color(0.57, 0.76, 0.71))
-	layout.add_child(subtitle)
+	_start_layout.add_child(subtitle)
 	var description := Label.new()
 	description.text = "Outrun the hunter. Master the maze. Get your crew out alive."
 	description.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	description.add_theme_color_override("font_color", Color(0.76, 0.81, 0.77))
-	layout.add_child(description)
+	_start_layout.add_child(description)
 	var divider := HSeparator.new()
 	divider.add_theme_constant_override("separation", 8)
-	layout.add_child(divider)
+	_start_layout.add_child(divider)
 	var host_button := Button.new()
 	host_button.text = "HOST A GAME"
 	host_button.custom_minimum_size.y = 46
 	host_button.pressed.connect(_host_game)
-	layout.add_child(host_button)
+	_start_layout.add_child(host_button)
 	var join_row := HBoxContainer.new()
 	join_row.add_theme_constant_override("separation", 8)
-	layout.add_child(join_row)
+	_start_layout.add_child(join_row)
 	_address_input = LineEdit.new()
 	_address_input.placeholder_text = "Host IP address"
 	_address_input.text = "127.0.0.1"
@@ -685,20 +785,65 @@ func _build_start_ui() -> void:
 	_start_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_start_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_start_status_label.add_theme_color_override("font_color", Color(0.66, 0.79, 0.75))
-	layout.add_child(_start_status_label)
+	_start_layout.add_child(_start_status_label)
 	var hint := Label.new()
 	hint.text = "WASD MOVE  ·  MOUSE LOOK  ·  ESC RELEASES MOUSE"
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.add_theme_font_size_override("font_size", 10)
 	hint.add_theme_color_override("font_color", Color(0.48, 0.62, 0.61))
-	layout.add_child(hint)
+	_start_layout.add_child(hint)
 	_start_layer.show()
+
+func _update_ui_for_viewport() -> void:
+	var viewport_size := get_viewport().get_visible_rect().size
+	var compact := viewport_size.x < 1000.0 or viewport_size.y < 720.0
+	var tight := viewport_size.x < 720.0 or viewport_size.y < 540.0
+	var compact_changed := compact != _lobby_compact
+	var tight_changed := tight != _lobby_tight
+	_lobby_compact = compact
+	_lobby_tight = tight
+	_roster_card_height = 38.0 if tight else (58.0 if compact else 70.0)
+	if _lobby_panel != null:
+		var edge_margin := 8.0 if tight else (14.0 if compact else 24.0)
+		_lobby_panel.offset_left = edge_margin
+		_lobby_panel.offset_right = -edge_margin
+		_lobby_panel.offset_top = edge_margin
+		_lobby_panel.offset_bottom = -edge_margin
+		var inner_horizontal := 8 if tight else (12 if compact else 22)
+		var inner_vertical := 6 if tight else (10 if compact else 17)
+		_lobby_outer_margin.add_theme_constant_override("margin_left", inner_horizontal)
+		_lobby_outer_margin.add_theme_constant_override("margin_right", inner_horizontal)
+		_lobby_outer_margin.add_theme_constant_override("margin_top", inner_vertical)
+		_lobby_outer_margin.add_theme_constant_override("margin_bottom", inner_vertical)
+		_lobby_layout.add_theme_constant_override("separation", 6 if tight else (9 if compact else 14))
+		_lobby_content.add_theme_constant_override("separation", 8 if compact else 18)
+		_lobby_side_column.custom_minimum_size.x = maxf(130.0, minf(300.0, viewport_size.x * 0.30)) if compact else 330.0
+		_lobby_side_column.add_theme_constant_override("separation", 4 if tight else (7 if compact else 10))
+		_maze_preview.custom_minimum_size = Vector2(maxf(150.0, viewport_size.x * 0.24), maxf(120.0, viewport_size.y * 0.22)) if compact else Vector2(300.0, 220.0)
+		_ready_button.custom_minimum_size = Vector2(104.0, 36.0) if tight else Vector2(124.0, 40.0)
+		_start_round_button.custom_minimum_size = Vector2(120.0, 36.0) if tight else Vector2(146.0, 40.0)
+		_lobby_controls_hint.add_theme_font_size_override("font_size", 8 if tight else (9 if compact else 10))
+		_lobby_controls_hint.text = "WASD MOVE  ·  MOUSE LOOK  ·  LEFT CLICK: USE POWERUP" if compact else "WASD MOVE  ·  SPACE JUMP  ·  MOUSE LOOK  ·  LEFT CLICK USES YOUR POWERUP  ·  ESC RELEASES MOUSE"
+		if compact_changed or tight_changed:
+			_roster_signature = ""
+			_refresh_lobby_roster(true)
+	if _start_panel != null:
+		_start_panel.custom_minimum_size.x = maxf(260.0, minf(480.0, viewport_size.x - 24.0))
+		var start_compact := viewport_size.x < 620.0 or viewport_size.y < 540.0
+		var start_margin := 16 if start_compact else 34
+		_start_margin.add_theme_constant_override("margin_left", start_margin)
+		_start_margin.add_theme_constant_override("margin_right", start_margin)
+		_start_margin.add_theme_constant_override("margin_top", 16 if start_compact else 30)
+		_start_margin.add_theme_constant_override("margin_bottom", 16 if start_compact else 28)
+		_start_layout.add_theme_constant_override("separation", 8 if start_compact else 14)
+		_start_title.add_theme_font_size_override("font_size", 40 if start_compact else 56)
 
 func _show_lobby() -> void:
 	_start_layer.hide()
 	_lobby_layer.show()
 	_roster_signature = ""
 	_refresh_lobby_roster(true)
+	_refresh_lobby_controls()
 
 func _show_start() -> void:
 	_lobby_layer.hide()
@@ -745,7 +890,8 @@ func _refresh_lobby_roster(force := false) -> void:
 	active_players.sort_custom(func(a: Node, b: Node) -> bool: return a.owner_peer_id < b.owner_peer_id)
 	var signature := ""
 	for player in active_players:
-		signature += "%d:%d;" % [player.owner_peer_id, player.character_index]
+		var is_ready := bool(_ready_players.get(player.owner_peer_id, false))
+		signature += "%d:%d:%s;" % [player.owner_peer_id, player.character_index, str(is_ready)]
 	for seat in range(active_players.size(), 4):
 		signature += "open:%d;" % seat
 	if not force and signature == _roster_signature:
@@ -758,7 +904,7 @@ func _refresh_lobby_roster(force := false) -> void:
 		count_label.text = "%d / 4" % active_players.size()
 	for slot_index in range(4):
 		var card := PanelContainer.new()
-		card.custom_minimum_size.y = 74
+		card.custom_minimum_size.y = _roster_card_height
 		_apply_panel_style(card, Color(0.07, 0.095, 0.1, 0.92), Color(0.18, 0.29, 0.3, 1.0))
 		_roster_container.add_child(card)
 		var card_margin := MarginContainer.new()
@@ -783,32 +929,62 @@ func _refresh_lobby_roster(force := false) -> void:
 			if _network_is_active() and player.owner_peer_id == multiplayer.get_unique_id():
 				player_tag += "  ·  YOU"
 			identity.text = "P%d  ·  %s" % [player.owner_peer_id, player_tag]
-			identity.add_theme_font_size_override("font_size", 10)
+			identity.add_theme_font_size_override("font_size", 8 if _lobby_tight else 10)
 			identity.add_theme_color_override("font_color", Color(0.54, 0.73, 0.68))
 			detail.add_child(identity)
 			var character_name := Label.new()
 			character_name.text = CHARACTER_CATALOG.NAMES[character_index]
-			character_name.add_theme_font_size_override("font_size", 14)
+			character_name.add_theme_font_size_override("font_size", 11 if _lobby_tight else (13 if _lobby_compact else 14))
 			character_name.add_theme_color_override("font_color", CHARACTER_CATALOG.COLORS[character_index])
 			detail.add_child(character_name)
+			var ready_state := Label.new()
+			var player_ready := bool(_ready_players.get(player.owner_peer_id, false))
+			ready_state.text = "READY" if player_ready else "NOT READY"
+			ready_state.add_theme_font_size_override("font_size", 7 if _lobby_tight else (8 if _lobby_compact else 9))
+			ready_state.add_theme_color_override("font_color", Color(0.49, 0.9, 0.67) if player_ready else Color(0.52, 0.62, 0.62))
+			detail.add_child(ready_state)
 		else:
 			var placeholder := ColorRect.new()
-			placeholder.custom_minimum_size = Vector2(64, 64)
+			placeholder.custom_minimum_size = Vector2(32, 32) if _lobby_tight else (Vector2(46, 46) if _lobby_compact else Vector2(64, 64))
 			placeholder.color = Color(0.1, 0.14, 0.15, 1.0)
 			row.add_child(placeholder)
 			var open_label := Label.new()
 			open_label.text = "OPEN SLOT\nWaiting for a runner…"
 			open_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-			open_label.add_theme_font_size_override("font_size", 11)
+			open_label.add_theme_font_size_override("font_size", 9 if _lobby_tight else (10 if _lobby_compact else 11))
 			open_label.add_theme_color_override("font_color", Color(0.49, 0.59, 0.6))
 			row.add_child(open_label)
+	_refresh_lobby_controls()
+
+func _refresh_lobby_controls() -> void:
+	if _ready_button == null or _start_round_button == null:
+		return
+	var is_host := multiplayer.has_multiplayer_peer() and multiplayer.is_server()
+	var connected_or_hosting := is_host or _network_is_active()
+	var can_ready := connected_or_hosting and not _round_active and not _round_finished
+	_ready_button.visible = can_ready and _lobby_layer.visible
+	_start_round_button.visible = can_ready and _lobby_layer.visible
+	var local_ready := bool(_ready_players.get(multiplayer.get_unique_id(), false)) if multiplayer.has_multiplayer_peer() else false
+	_ready_button.text = "CANCEL READY" if local_ready else "READY UP"
+	_start_round_button.disabled = not is_host or not _all_players_ready()
+	var active_players := get_tree().get_nodes_in_group("players")
+	var ready_count := 0
+	for player in active_players:
+		if bool(_ready_players.get(player.owner_peer_id, false)):
+			ready_count += 1
+	if active_players.size() < 2:
+		_ready_status_label.text = "Waiting for at least 2 players to begin."
+	elif _all_players_ready():
+		_ready_status_label.text = "Everyone is ready. Host can start the round."
+	else:
+		_ready_status_label.text = "%d / %d ready · Waiting for the rest of the crew." % [ready_count, active_players.size()]
 
 func _create_character_preview(character_index: int) -> SubViewportContainer:
 	var container := SubViewportContainer.new()
-	container.custom_minimum_size = Vector2(64, 70)
+	container.custom_minimum_size = Vector2(32, 34) if _lobby_tight else (Vector2(46, 50) if _lobby_compact else Vector2(60, 64))
 	container.stretch = true
 	var viewport := SubViewport.new()
-	viewport.size = Vector2i(128, 140)
+	viewport.size = Vector2i(64, 68) if _lobby_tight else (Vector2i(92, 100) if _lobby_compact else Vector2i(120, 128))
 	viewport.transparent_bg = true
 	viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
 	container.add_child(viewport)
@@ -826,6 +1002,10 @@ func _create_character_preview(character_index: int) -> SubViewportContainer:
 	_play_preview_idle(character)
 	var camera := Camera3D.new()
 	camera.position = Vector3(0.0, 1.0, 3.6)
+	if _lobby_compact:
+		camera.position.z = 3.9
+	if _lobby_tight:
+		camera.position.z = 4.2
 	camera.rotation.x = -0.02
 	camera.fov = 30.0
 	camera.current = true
@@ -898,7 +1078,9 @@ func _spawn_peer(peer_id: int) -> void:
 	var character_index: int = _get_available_character_index()
 	if character_index < 0:
 		return
+	_ready_players[peer_id] = false
 	player_spawner.spawn({"peer_id": peer_id, "character_index": character_index})
+	_broadcast_ready_state()
 
 func _get_available_character_index() -> int:
 	var used_character_indices: Dictionary = {}
@@ -929,7 +1111,6 @@ func _on_peer_connected(peer_id: int) -> void:
 	if multiplayer.is_server():
 		_spawn_peer(peer_id)
 		_refresh_status("Player %d joined" % peer_id)
-		_maybe_start_round.call_deferred()
 	else:
 		_refresh_lobby_roster.call_deferred(true)
 
@@ -938,13 +1119,15 @@ func _on_peer_disconnected(peer_id: int) -> void:
 		var player := players.get_node_or_null("Player_%d" % peer_id)
 		if player != null:
 			player_spawner.despawn(player)
-			_refresh_status.call_deferred("Player %d left" % peer_id)
+		_ready_players.erase(peer_id)
+		_broadcast_ready_state()
+		_refresh_status.call_deferred("Player %d left" % peer_id)
 	else:
 		_refresh_lobby_roster.call_deferred(true)
 
 func _on_player_spawned(_player: Node) -> void:
 	_refresh_lobby_roster.call_deferred(true)
-	_maybe_start_round.call_deferred()
+	_refresh_lobby_controls.call_deferred()
 
 func _on_player_despawned(_player: Node) -> void:
 	_refresh_lobby_roster.call_deferred(true)
@@ -966,7 +1149,11 @@ func _on_server_disconnected() -> void:
 	_show_start()
 	_round_active = false
 	_round_finished = false
+	_ready_players.clear()
 	_menu_camera.current = true
+	var monster := get_node_or_null("Monster")
+	if monster != null:
+		monster.set("visible", false)
 	_round_hud_layer.hide()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_roster_signature = ""
