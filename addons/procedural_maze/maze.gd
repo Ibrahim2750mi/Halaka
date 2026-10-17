@@ -33,8 +33,8 @@ extends StaticBody3D
 		if is_inside_tree():
 			generate()
 
-const FLOOR_ASSET: PackedScene = preload("res://kenney_modular-cave-kit_1.0/Models/GLB format/template-floor.glb")
-const WALL_ASSET: PackedScene = preload("res://kenney_modular-cave-kit_1.0/Models/GLB format/template-wall.glb")
+const FLOOR_ASSET: PackedScene = preload("res://assets/environment/kenney_modular-cave-kit_1.0/Models/GLB format/template-floor.glb")
+const WALL_ASSET: PackedScene = preload("res://assets/environment/kenney_modular-cave-kit_1.0/Models/GLB format/template-wall.glb")
 var _open_cells: Array[PackedByteArray] = []
 var _chamber_baffles: Array[Dictionary] = []
 

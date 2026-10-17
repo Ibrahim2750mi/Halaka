@@ -1,0 +1,38 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/powerup_pickup.gd" id="1_pickup"]
+
+[sub_resource type="SphereMesh" id="SphereMesh_Orb"]
+radius = 0.28
+height = 0.56
+radial_segments = 16
+rings = 8
+
+[sub_resource type="TorusMesh" id="TorusMesh_Ring"]
+inner_radius = 0.34
+outer_radius = 0.4
+ring_sides = 8
+rings = 16
+
+[sub_resource type="StandardMaterial3D" id="Material_Stun"]
+shading_mode = 0
+albedo_color = Color(0.2, 0.85, 1, 1)
+emission_enabled = true
+emission = Color(0.12, 0.65, 1, 1)
+emission_energy_multiplier = 1.4
+
+[node name="PowerupPickup" type="Node3D"]
+script = ExtResource("1_pickup")
+
+[node name="Visual" type="Node3D" parent="."]
+
+[node name="Orb" type="MeshInstance3D" parent="Visual"]
+mesh = SubResource("SphereMesh_Orb")
+surface_material_override/0 = SubResource("Material_Stun")
+cast_shadow = 0
+
+[node name="Ring" type="MeshInstance3D" parent="Visual"]
+rotation = Vector3(1.570796, 0, 0)
+mesh = SubResource("TorusMesh_Ring")
+surface_material_override/0 = SubResource("Material_Stun")
+cast_shadow = 0

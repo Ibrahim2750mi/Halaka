@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://dbu6tb7s66qpe"
+path="res://.godot/imported/gate.obj-29b0d2f6b93a2a43afb2a00d4d96e183.mesh"
+
+[deps]
+
+files=["res://.godot/imported/gate.obj-29b0d2f6b93a2a43afb2a00d4d96e183.mesh"]
+
+source_file="res://assets/environment/kenney_modular-cave-kit_1.0/Models/OBJ format/gate.obj"
+dest_files=["res://.godot/imported/gate.obj-29b0d2f6b93a2a43afb2a00d4d96e183.mesh", "res://.godot/imported/gate.obj-29b0d2f6b93a2a43afb2a00d4d96e183.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false

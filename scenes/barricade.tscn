@@ -1,0 +1,28 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/barricade.gd" id="1_barricade"]
+
+[sub_resource type="BoxShape3D" id="BoxShape_Barricade"]
+size = Vector3(2.4, 2.6, 0.3)
+
+[sub_resource type="BoxMesh" id="BoxMesh_Barricade"]
+size = Vector3(2.4, 2.6, 0.3)
+
+[sub_resource type="StandardMaterial3D" id="Material_Barricade"]
+albedo_color = Color(0.16, 0.105, 0.075, 1)
+roughness = 0.9
+emission_enabled = true
+emission = Color(0.7, 0.19, 0.035, 1)
+emission_energy_multiplier = 0.45
+
+[node name="Barricade" type="StaticBody3D"]
+collision_layer = 1
+collision_mask = 1
+script = ExtResource("1_barricade")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="."]
+shape = SubResource("BoxShape_Barricade")
+
+[node name="Visual" type="MeshInstance3D" parent="."]
+mesh = SubResource("BoxMesh_Barricade")
+surface_material_override/0 = SubResource("Material_Barricade")
