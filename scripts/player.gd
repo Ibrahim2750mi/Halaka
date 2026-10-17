@@ -1,24 +1,10 @@
 extends CharacterBody3D
 ## Each player controls only their own avatar. MultiplayerSynchronizer shares its transform.
 
-const CHARACTER_SCENES: Array[PackedScene] = [
-	preload("res://assets/characters/players/man-00/MAN_00_Model.fbx"),
-	preload("res://assets/characters/players/man-01/MAN_01_Model.fbx"),
-	preload("res://assets/characters/players/woman-00/WOMAN_00_Model.fbx"),
-	preload("res://assets/characters/players/woman-01/WOMAN_00_Model.fbx"),
-]
-const CHARACTER_ALBEDO_TEXTURES: Array[Texture2D] = [
-	preload("res://assets/characters/players/man-00/MAN_00_Texture.png"),
-	preload("res://assets/characters/players/man-01/MAN_01_Texture.png"),
-	preload("res://assets/characters/players/woman-00/WOMAN_00_Texture.png"),
-	preload("res://assets/characters/players/woman-01/WOMAN_00_Texture.png"),
-]
-const CHARACTER_AO_TEXTURES: Array[Texture2D] = [
-	preload("res://assets/characters/players/man-00/MAN_00_AO.png"),
-	preload("res://assets/characters/players/man-01/MAN_01_AO.png"),
-	preload("res://assets/characters/players/woman-00/WOMAN_00_AO.png"),
-	preload("res://assets/characters/players/woman-01/WOMAN_00_AO.png"),
-]
+const CHARACTER_CATALOG = preload("res://scripts/character_catalog.gd")
+const CHARACTER_SCENES: Array[PackedScene] = CHARACTER_CATALOG.MODELS
+const CHARACTER_ALBEDO_TEXTURES: Array[Texture2D] = CHARACTER_CATALOG.ALBEDO_TEXTURES
+const CHARACTER_AO_TEXTURES: Array[Texture2D] = CHARACTER_CATALOG.AO_TEXTURES
 
 @export var move_speed := 5.0
 @export var jump_speed := 4.5
@@ -70,9 +56,10 @@ var _last_animation_position := Vector3.ZERO
 
 func _ready() -> void:
 	var is_local := _is_local_player()
-	camera.current = is_local
-	if is_local:
+	camera.current = is_local and round_active
+	if is_local and round_active:
 		camera.make_current()
+	if is_local:
 		_camera_yaw = rotation.y
 		_smoothed_camera_position = global_position + Vector3.UP * 1.55
 		_camera_follow_ready = true
@@ -99,9 +86,8 @@ func _ready() -> void:
 	_cache_animation_bones()
 	_last_animation_position = global_position
 	visual.visible = not is_local and not _character_asset_loaded
-	var player_colors: Array[Color] = [Color(0.22, 0.75, 0.95), Color(0.96, 0.42, 0.24), Color(0.56, 0.9, 0.38), Color(0.86, 0.55, 0.96)]
 	var player_material := StandardMaterial3D.new()
-	player_material.albedo_color = player_colors[character_index % player_colors.size()]
+	player_material.albedo_color = CHARACTER_CATALOG.COLORS[character_index % CHARACTER_CATALOG.COLORS.size()]
 	visual.material_override = player_material
 	_last_alive_state = is_alive
 	_apply_alive_state(is_local)
@@ -109,12 +95,14 @@ func _ready() -> void:
 		_create_death_overlay()
 		_create_powerup_hud()
 		_create_blind_overlay()
-	if is_local and multiplayer.has_multiplayer_peer():
+	if is_local and multiplayer.has_multiplayer_peer() and round_active:
 		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 	add_to_group("players")
 
 func _process(delta: float) -> void:
 	var is_local := _is_local_player()
+	if is_local and round_active and not camera.current:
+		camera.make_current()
 	_update_procedural_animation(delta)
 	if is_local and _camera_follow_ready:
 		var camera_target: Vector3 = global_position + Vector3.UP * 1.55
@@ -338,7 +326,7 @@ func _create_blind_overlay() -> void:
 func _unhandled_input(event: InputEvent) -> void:
 	if not _is_local_player():
 		return
-	if not is_alive:
+	if not is_alive or not round_active:
 		return
 	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 		var yaw_delta: float = -event.relative.x * mouse_sensitivity

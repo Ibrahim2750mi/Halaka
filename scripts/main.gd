@@ -18,6 +18,15 @@ const POWERUP_RANGE := 60.0
 const PLAYER_SCENE: PackedScene = preload("res://scenes/player.tscn")
 const POWERUP_SCENE: PackedScene = preload("res://scenes/powerup_pickup.tscn")
 const BARRICADE_SCENE: PackedScene = preload("res://scenes/barricade.tscn")
+const CHARACTER_CATALOG = preload("res://scripts/character_catalog.gd")
+const MAZE_PREVIEW_SCRIPT = preload("res://scripts/lobby_maze_preview.gd")
+const CHARACTER_PREVIEW_SCRIPT = preload("res://scripts/lobby_character_preview.gd")
+const LOBBY_TIPS: Array[Dictionary] = [
+	{"title": "STUN SHOT", "body": "Collect the blue charge, aim at the hunter, and left-click to freeze it for 5 seconds. A direct hit earns 25 points."},
+	{"title": "BLIND FLASH", "body": "The violet charge blinds another player for 2.5 seconds. It cannot affect the hunter."},
+	{"title": "BARRICADE", "body": "Drop a temporary wall across a passage to block pursuit for 10 seconds."},
+	{"title": "WALL TRAVEL", "body": "Use the green charge to pass through cave walls for 3 seconds. Keep moving."},
+]
 
 @onready var maze: Node = $Maze
 @onready var players: Node3D = $Players
@@ -26,16 +35,27 @@ const BARRICADE_SCENE: PackedScene = preload("res://scenes/barricade.tscn")
 @onready var pickup_spawner: MultiplayerSpawner = $Pickups/MultiplayerSpawner
 @onready var barricade_spawner: MultiplayerSpawner = $Barricades/MultiplayerSpawner
 
+var _start_layer: CanvasLayer
+var _start_status_label: Label
+var _lobby_layer: CanvasLayer
 var _lobby_panel: PanelContainer
-var _lobby_controls: VBoxContainer
-var _info_layout: VBoxContainer
 var _address_input: LineEdit
-var _status_label: Label
-var _player_list_label: Label
+var _lobby_status_label: Label
+var _roster_container: VBoxContainer
+var _maze_preview: Control
+var _tip_title: Label
+var _tip_body: Label
+var _roster_signature := ""
+var _tip_index := 0
+var _tip_timer := 9.0
+var _roster_refresh_timer := 0.0
+var _menu_camera: Camera3D
+var _menu_camera_angle := 0.0
 var _status_message := "Waiting for a host."
 var _round_active := false
 var _round_finished := false
 var _round_time_left := ROUND_LENGTH
+var _round_hud_layer: CanvasLayer
 var _hud_label: Label
 var _round_sync_timer := 0.0
 var _powerup_spawn_timer := 0.0
@@ -53,12 +73,26 @@ func _ready() -> void:
 	multiplayer.server_disconnected.connect(_on_server_disconnected)
 	player_spawner.spawned.connect(_on_player_spawned)
 	player_spawner.despawned.connect(_on_player_despawned)
+	_setup_menu_camera()
 	_build_lobby_ui()
+	_build_start_ui()
 	_build_round_hud()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 func _process(delta: float) -> void:
 	_update_round_hud()
+	if _menu_camera != null and not _round_active and not _round_finished:
+		_update_menu_camera(delta)
+	if _lobby_layer != null and _lobby_layer.visible:
+		_tip_timer -= delta
+		if _tip_timer <= 0.0:
+			_tip_index = (_tip_index + 1) % LOBBY_TIPS.size()
+			_tip_timer = 9.0
+			_update_lobby_tip()
+		_roster_refresh_timer -= delta
+		if _roster_refresh_timer <= 0.0:
+			_roster_refresh_timer = 0.35
+			_refresh_lobby_roster()
 	if not _network_is_active() or not multiplayer.is_server():
 		return
 	if not _round_active:
@@ -84,20 +118,52 @@ func _network_is_active() -> bool:
 		return false
 	return multiplayer.multiplayer_peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
 
+func _setup_menu_camera() -> void:
+	_menu_camera = Camera3D.new()
+	_menu_camera.name = "LobbyOrbitCamera"
+	_menu_camera.fov = 62.0
+	_menu_camera.far = 180.0
+	add_child(_menu_camera)
+	_menu_camera.current = true
+	_update_menu_camera(0.0)
+
+func _update_menu_camera(delta: float) -> void:
+	_menu_camera_angle += delta * 0.1
+	var focus: Vector3 = maze.cell_to_world(Vector2i(24, 24)) + Vector3.UP * 1.3
+	var orbit_radius := 31.0
+	_menu_camera.global_position = focus + Vector3(cos(_menu_camera_angle) * orbit_radius, 18.0, sin(_menu_camera_angle) * orbit_radius)
+	_menu_camera.look_at(focus, Vector3.UP)
+
 func _build_round_hud() -> void:
-	if _info_layout == null:
-		return
-	_info_layout.add_child(HSeparator.new())
+	_round_hud_layer = CanvasLayer.new()
+	_round_hud_layer.name = "RoundHUD"
+	_round_hud_layer.visible = false
+	add_child(_round_hud_layer)
+	var panel := PanelContainer.new()
+	panel.position = Vector2(22, 22)
+	panel.custom_minimum_size = Vector2(300, 0)
+	_apply_panel_style(panel, Color(0.035, 0.055, 0.065, 0.92), Color(0.29, 0.43, 0.45, 0.9))
+	_round_hud_layer.add_child(panel)
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 16)
+	margin.add_theme_constant_override("margin_right", 16)
+	margin.add_theme_constant_override("margin_top", 12)
+	margin.add_theme_constant_override("margin_bottom", 12)
+	panel.add_child(margin)
+	var layout := VBoxContainer.new()
+	layout.add_theme_constant_override("separation", 5)
+	margin.add_child(layout)
 	_hud_label = Label.new()
 	_hud_label.name = "RoundStatus"
 	_hud_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_hud_label.add_theme_color_override("font_color", Color(1.0, 0.88, 0.72))
-	_info_layout.add_child(_hud_label)
+	layout.add_child(_hud_label)
 	_update_round_hud()
 
 func _update_round_hud() -> void:
 	if _hud_label == null:
 		return
+	_round_hud_layer.visible = _round_active or _round_finished
 	var heading := "Waiting for another player..."
 	if _round_active:
 		heading = "Round: %d:%02d" % [int(_round_time_left) / 60, int(_round_time_left) % 60]
@@ -369,49 +435,438 @@ func _sync_round_state(active: bool, time_left: float, finished: bool) -> void:
 	_round_active = active
 	_round_time_left = time_left
 	_round_finished = finished
+	_lobby_layer.visible = not active and not finished
+	_round_hud_layer.visible = active or finished
+	_menu_camera.current = not active
+	if active:
+		Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+		var local_player := players.get_node_or_null("Player_%d" % multiplayer.get_unique_id())
+		if local_player != null:
+			var local_camera := local_player.get_node_or_null("Camera3D") as Camera3D
+			if local_camera != null:
+				local_camera.make_current()
+	else:
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	_update_round_hud()
 
 func _build_lobby_ui() -> void:
-	var canvas := CanvasLayer.new()
-	canvas.name = "LobbyUI"
-	add_child(canvas)
+	_lobby_layer = CanvasLayer.new()
+	_lobby_layer.name = "LobbyUI"
+	_lobby_layer.layer = 5
+	add_child(_lobby_layer)
+	var backdrop := ColorRect.new()
+	backdrop.color = Color(0.015, 0.025, 0.03, 0.26)
+	backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_lobby_layer.add_child(backdrop)
 	_lobby_panel = PanelContainer.new()
-	_lobby_panel.name = "GameInfoPanel"
-	_lobby_panel.position = Vector2(28, 28)
-	_lobby_panel.custom_minimum_size = Vector2(340, 0)
-	canvas.add_child(_lobby_panel)
-	_info_layout = VBoxContainer.new()
-	_lobby_panel.add_child(_info_layout)
-	_lobby_controls = VBoxContainer.new()
-	_info_layout.add_child(_lobby_controls)
+	_lobby_panel.name = "LobbyPanel"
+	_lobby_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_lobby_panel.offset_left = 26
+	_lobby_panel.offset_top = 22
+	_lobby_panel.offset_right = -26
+	_lobby_panel.offset_bottom = -22
+	_apply_panel_style(_lobby_panel, Color(0.045, 0.065, 0.075, 0.78), Color(0.27, 0.42, 0.43, 1.0))
+	_lobby_layer.add_child(_lobby_panel)
+	var outer_margin := MarginContainer.new()
+	outer_margin.add_theme_constant_override("margin_left", 22)
+	outer_margin.add_theme_constant_override("margin_right", 22)
+	outer_margin.add_theme_constant_override("margin_top", 17)
+	outer_margin.add_theme_constant_override("margin_bottom", 17)
+	_lobby_panel.add_child(outer_margin)
+	var layout := VBoxContainer.new()
+	layout.add_theme_constant_override("separation", 14)
+	outer_margin.add_child(layout)
+
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 18)
+	layout.add_child(header)
 	var title := Label.new()
-	title.text = "HALAKA  |  2–4 PLAYERS"
-	_lobby_controls.add_child(title)
-	var instructions := Label.new()
-	instructions.text = "Host a game or enter the host's LAN address."
-	instructions.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_lobby_controls.add_child(instructions)
+	title.text = "HALAKA"
+	title.add_theme_font_size_override("font_size", 30)
+	title.add_theme_color_override("font_color", Color(0.91, 0.96, 0.91))
+	header.add_child(title)
+	var subtitle := Label.new()
+	subtitle.text = "A CAVE RUN FOR 2–4 SURVIVORS"
+	subtitle.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	subtitle.add_theme_font_size_override("font_size", 13)
+	subtitle.add_theme_color_override("font_color", Color(0.54, 0.73, 0.70))
+	header.add_child(subtitle)
+	layout.add_child(HSeparator.new())
+
+	var content := HBoxContainer.new()
+	content.add_theme_constant_override("separation", 18)
+	content.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	layout.add_child(content)
+	var map_panel := PanelContainer.new()
+	map_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	map_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_apply_panel_style(map_panel, Color(0.025, 0.04, 0.047, 0.76), Color(0.16, 0.27, 0.29, 1.0))
+	content.add_child(map_panel)
+	var map_margin := MarginContainer.new()
+	map_margin.add_theme_constant_override("margin_left", 12)
+	map_margin.add_theme_constant_override("margin_right", 12)
+	map_margin.add_theme_constant_override("margin_top", 10)
+	map_margin.add_theme_constant_override("margin_bottom", 10)
+	map_panel.add_child(map_margin)
+	var map_layout := VBoxContainer.new()
+	map_layout.add_theme_constant_override("separation", 7)
+	map_margin.add_child(map_layout)
+	var map_title := Label.new()
+	map_title.text = "THE CINDER MAZE"
+	map_title.add_theme_font_size_override("font_size", 17)
+	map_title.add_theme_color_override("font_color", Color(0.87, 0.91, 0.84))
+	map_layout.add_child(map_title)
+	var map_caption := Label.new()
+	map_caption.text = "TOP-DOWN FIELD MAP  ·  KNOW YOUR STARTING POINT"
+	map_caption.add_theme_font_size_override("font_size", 10)
+	map_caption.add_theme_color_override("font_color", Color(0.5, 0.63, 0.63))
+	map_layout.add_child(map_caption)
+	_maze_preview = Control.new()
+	_maze_preview.name = "MazePreview"
+	_maze_preview.set_script(MAZE_PREVIEW_SCRIPT)
+	_maze_preview.custom_minimum_size = Vector2(350, 280)
+	_maze_preview.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_maze_preview.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	map_layout.add_child(_maze_preview)
+	_maze_preview.call("set_maze", maze)
+	var legend := HBoxContainer.new()
+	legend.add_theme_constant_override("separation", 15)
+	map_layout.add_child(legend)
+	_add_map_legend_item(legend, Color("#76d8c0"), "SURVIVOR SPAWN")
+	_add_map_legend_item(legend, Color("#db6c4d"), "HUNTER START")
+
+	var side_column := VBoxContainer.new()
+	side_column.custom_minimum_size.x = 330
+	side_column.size_flags_horizontal = Control.SIZE_FILL
+	side_column.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	side_column.add_theme_constant_override("separation", 10)
+	content.add_child(side_column)
+	var roster_heading := HBoxContainer.new()
+	side_column.add_child(roster_heading)
+	var roster_title := Label.new()
+	roster_title.text = "RUNNERS"
+	roster_title.add_theme_font_size_override("font_size", 16)
+	roster_title.add_theme_color_override("font_color", Color(0.87, 0.91, 0.84))
+	roster_heading.add_child(roster_title)
+	var roster_spacer := Control.new()
+	roster_spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	roster_heading.add_child(roster_spacer)
+	var count_label := Label.new()
+	count_label.name = "RunnerCount"
+	count_label.add_theme_color_override("font_color", Color(0.56, 0.71, 0.68))
+	roster_heading.add_child(count_label)
+	_roster_container = VBoxContainer.new()
+	_roster_container.add_theme_constant_override("separation", 6)
+	side_column.add_child(_roster_container)
+	var roster_footer := Label.new()
+	roster_footer.text = "Characters are assigned at random when players join."
+	roster_footer.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	roster_footer.add_theme_font_size_override("font_size", 11)
+	roster_footer.add_theme_color_override("font_color", Color(0.5, 0.62, 0.63))
+	side_column.add_child(roster_footer)
+	var tip_panel := PanelContainer.new()
+	tip_panel.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_apply_panel_style(tip_panel, Color(0.11, 0.14, 0.13, 0.88), Color(0.48, 0.5, 0.3, 0.85))
+	side_column.add_child(tip_panel)
+	var tip_margin := MarginContainer.new()
+	tip_margin.add_theme_constant_override("margin_left", 13)
+	tip_margin.add_theme_constant_override("margin_right", 13)
+	tip_margin.add_theme_constant_override("margin_top", 10)
+	tip_margin.add_theme_constant_override("margin_bottom", 10)
+	tip_panel.add_child(tip_margin)
+	var tip_layout := VBoxContainer.new()
+	tip_layout.add_theme_constant_override("separation", 5)
+	tip_margin.add_child(tip_layout)
+	var tip_kicker := Label.new()
+	tip_kicker.text = "FIELD NOTE  ·  POWERUP GUIDE"
+	tip_kicker.add_theme_font_size_override("font_size", 10)
+	tip_kicker.add_theme_color_override("font_color", Color(0.73, 0.7, 0.44))
+	tip_layout.add_child(tip_kicker)
+	_tip_title = Label.new()
+	_tip_title.add_theme_font_size_override("font_size", 15)
+	_tip_title.add_theme_color_override("font_color", Color(0.95, 0.9, 0.72))
+	tip_layout.add_child(_tip_title)
+	_tip_body = Label.new()
+	_tip_body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_tip_body.add_theme_font_size_override("font_size", 12)
+	_tip_body.add_theme_color_override("font_color", Color(0.78, 0.81, 0.73))
+	tip_layout.add_child(_tip_body)
+	_update_lobby_tip()
+
+	var controls_hint := Label.new()
+	controls_hint.text = "WASD MOVE  ·  SPACE JUMP  ·  MOUSE LOOK  ·  LEFT CLICK USES YOUR POWERUP  ·  ESC RELEASES MOUSE"
+	controls_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	controls_hint.add_theme_font_size_override("font_size", 10)
+	controls_hint.add_theme_color_override("font_color", Color(0.55, 0.68, 0.66))
+	layout.add_child(controls_hint)
+	layout.add_child(HSeparator.new())
+	var footer := HBoxContainer.new()
+	footer.add_theme_constant_override("separation", 12)
+	layout.add_child(footer)
+	_lobby_status_label = Label.new()
+	_lobby_status_label.text = _status_message
+	_lobby_status_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_lobby_status_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_lobby_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_lobby_status_label.add_theme_color_override("font_color", Color(0.67, 0.79, 0.76))
+	footer.add_child(_lobby_status_label)
+	_refresh_lobby_roster(true)
+	_render_status()
+	_lobby_layer.hide()
+
+func _build_start_ui() -> void:
+	_start_layer = CanvasLayer.new()
+	_start_layer.name = "StartScreen"
+	_start_layer.layer = 6
+	add_child(_start_layer)
+	var shade := ColorRect.new()
+	shade.color = Color(0.01, 0.02, 0.025, 0.32)
+	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_start_layer.add_child(shade)
+	var center := CenterContainer.new()
+	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_start_layer.add_child(center)
+	var panel := PanelContainer.new()
+	panel.custom_minimum_size = Vector2(480, 0)
+	_apply_panel_style(panel, Color(0.025, 0.04, 0.048, 0.86), Color(0.3, 0.47, 0.46, 1.0))
+	center.add_child(panel)
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 34)
+	margin.add_theme_constant_override("margin_right", 34)
+	margin.add_theme_constant_override("margin_top", 30)
+	margin.add_theme_constant_override("margin_bottom", 28)
+	panel.add_child(margin)
+	var layout := VBoxContainer.new()
+	layout.add_theme_constant_override("separation", 14)
+	margin.add_child(layout)
+	var title := Label.new()
+	title.text = "HALAKA"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 56)
+	title.add_theme_color_override("font_color", Color(0.91, 0.96, 0.91))
+	layout.add_child(title)
+	var subtitle := Label.new()
+	subtitle.text = "A CAVE RUN FOR 2–4 SURVIVORS"
+	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	subtitle.add_theme_font_size_override("font_size", 14)
+	subtitle.add_theme_color_override("font_color", Color(0.57, 0.76, 0.71))
+	layout.add_child(subtitle)
+	var description := Label.new()
+	description.text = "Outrun the hunter. Master the maze. Get your crew out alive."
+	description.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	description.add_theme_color_override("font_color", Color(0.76, 0.81, 0.77))
+	layout.add_child(description)
+	var divider := HSeparator.new()
+	divider.add_theme_constant_override("separation", 8)
+	layout.add_child(divider)
+	var host_button := Button.new()
+	host_button.text = "HOST A GAME"
+	host_button.custom_minimum_size.y = 46
+	host_button.pressed.connect(_host_game)
+	layout.add_child(host_button)
+	var join_row := HBoxContainer.new()
+	join_row.add_theme_constant_override("separation", 8)
+	layout.add_child(join_row)
 	_address_input = LineEdit.new()
 	_address_input.placeholder_text = "Host IP address"
 	_address_input.text = "127.0.0.1"
-	_lobby_controls.add_child(_address_input)
-	var buttons := HBoxContainer.new()
-	_lobby_controls.add_child(buttons)
-	var host_button := Button.new()
-	host_button.text = "Host Game"
-	host_button.pressed.connect(_host_game)
-	buttons.add_child(host_button)
+	_address_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_address_input.custom_minimum_size.y = 42
+	_address_input.tooltip_text = "Enter the host computer's local network IP address."
+	join_row.add_child(_address_input)
 	var join_button := Button.new()
-	join_button.text = "Join Game"
+	join_button.text = "JOIN"
+	join_button.custom_minimum_size = Vector2(102, 42)
 	join_button.pressed.connect(_join_game)
-	buttons.add_child(join_button)
-	_info_layout.add_child(HSeparator.new())
-	_status_label = Label.new()
-	_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_info_layout.add_child(_status_label)
-	_player_list_label = Label.new()
-	_info_layout.add_child(_player_list_label)
-	_refresh_player_list()
+	join_row.add_child(join_button)
+	_start_status_label = Label.new()
+	_start_status_label.text = _status_message
+	_start_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_start_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_start_status_label.add_theme_color_override("font_color", Color(0.66, 0.79, 0.75))
+	layout.add_child(_start_status_label)
+	var hint := Label.new()
+	hint.text = "WASD MOVE  ·  MOUSE LOOK  ·  ESC RELEASES MOUSE"
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.add_theme_font_size_override("font_size", 10)
+	hint.add_theme_color_override("font_color", Color(0.48, 0.62, 0.61))
+	layout.add_child(hint)
+	_start_layer.show()
+
+func _show_lobby() -> void:
+	_start_layer.hide()
+	_lobby_layer.show()
+	_roster_signature = ""
+	_refresh_lobby_roster(true)
+
+func _show_start() -> void:
+	_lobby_layer.hide()
+	_start_layer.show()
+
+func _apply_panel_style(panel: Control, background: Color, border: Color) -> void:
+	var style := StyleBoxFlat.new()
+	style.bg_color = background
+	style.border_color = border
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(10)
+	style.content_margin_left = 1
+	style.content_margin_right = 1
+	style.content_margin_top = 1
+	style.content_margin_bottom = 1
+	panel.add_theme_stylebox_override("panel", style)
+
+func _add_map_legend_item(parent: HBoxContainer, color: Color, text: String) -> void:
+	var item := HBoxContainer.new()
+	item.add_theme_constant_override("separation", 5)
+	parent.add_child(item)
+	var swatch := ColorRect.new()
+	swatch.color = color
+	swatch.custom_minimum_size = Vector2(8, 8)
+	swatch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	item.add_child(swatch)
+	var label := Label.new()
+	label.text = text
+	label.add_theme_font_size_override("font_size", 9)
+	label.add_theme_color_override("font_color", Color(0.61, 0.72, 0.69))
+	item.add_child(label)
+
+func _update_lobby_tip() -> void:
+	if _tip_title == null or _tip_body == null:
+		return
+	var tip: Dictionary = LOBBY_TIPS[_tip_index]
+	_tip_title.text = String(tip["title"])
+	_tip_body.text = String(tip["body"])
+
+func _refresh_lobby_roster(force := false) -> void:
+	if _roster_container == null:
+		return
+	var active_players := get_tree().get_nodes_in_group("players")
+	active_players.sort_custom(func(a: Node, b: Node) -> bool: return a.owner_peer_id < b.owner_peer_id)
+	var signature := ""
+	for player in active_players:
+		signature += "%d:%d;" % [player.owner_peer_id, player.character_index]
+	for seat in range(active_players.size(), 4):
+		signature += "open:%d;" % seat
+	if not force and signature == _roster_signature:
+		return
+	_roster_signature = signature
+	for child in _roster_container.get_children():
+		child.queue_free()
+	var count_label := _lobby_panel.find_child("RunnerCount", true, false) as Label
+	if count_label != null:
+		count_label.text = "%d / 4" % active_players.size()
+	for slot_index in range(4):
+		var card := PanelContainer.new()
+		card.custom_minimum_size.y = 74
+		_apply_panel_style(card, Color(0.07, 0.095, 0.1, 0.92), Color(0.18, 0.29, 0.3, 1.0))
+		_roster_container.add_child(card)
+		var card_margin := MarginContainer.new()
+		card_margin.add_theme_constant_override("margin_left", 6)
+		card_margin.add_theme_constant_override("margin_right", 6)
+		card_margin.add_theme_constant_override("margin_top", 2)
+		card_margin.add_theme_constant_override("margin_bottom", 2)
+		card.add_child(card_margin)
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 10)
+		card_margin.add_child(row)
+		if slot_index < active_players.size():
+			var player: Node = active_players[slot_index]
+			var character_index := clampi(player.character_index, 0, CHARACTER_CATALOG.MODELS.size() - 1)
+			row.add_child(_create_character_preview(character_index))
+			var detail := VBoxContainer.new()
+			detail.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			detail.add_theme_constant_override("separation", 2)
+			row.add_child(detail)
+			var identity := Label.new()
+			var player_tag := "HOST" if player.owner_peer_id == 1 else "RUNNER"
+			if _network_is_active() and player.owner_peer_id == multiplayer.get_unique_id():
+				player_tag += "  ·  YOU"
+			identity.text = "P%d  ·  %s" % [player.owner_peer_id, player_tag]
+			identity.add_theme_font_size_override("font_size", 10)
+			identity.add_theme_color_override("font_color", Color(0.54, 0.73, 0.68))
+			detail.add_child(identity)
+			var character_name := Label.new()
+			character_name.text = CHARACTER_CATALOG.NAMES[character_index]
+			character_name.add_theme_font_size_override("font_size", 14)
+			character_name.add_theme_color_override("font_color", CHARACTER_CATALOG.COLORS[character_index])
+			detail.add_child(character_name)
+		else:
+			var placeholder := ColorRect.new()
+			placeholder.custom_minimum_size = Vector2(64, 64)
+			placeholder.color = Color(0.1, 0.14, 0.15, 1.0)
+			row.add_child(placeholder)
+			var open_label := Label.new()
+			open_label.text = "OPEN SLOT\nWaiting for a runner…"
+			open_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			open_label.add_theme_font_size_override("font_size", 11)
+			open_label.add_theme_color_override("font_color", Color(0.49, 0.59, 0.6))
+			row.add_child(open_label)
+
+func _create_character_preview(character_index: int) -> SubViewportContainer:
+	var container := SubViewportContainer.new()
+	container.custom_minimum_size = Vector2(64, 70)
+	container.stretch = true
+	var viewport := SubViewport.new()
+	viewport.size = Vector2i(128, 140)
+	viewport.transparent_bg = true
+	viewport.render_target_update_mode = SubViewport.UPDATE_WHEN_VISIBLE
+	container.add_child(viewport)
+	var stage := Node3D.new()
+	stage.name = "PreviewStage"
+	stage.set_script(CHARACTER_PREVIEW_SCRIPT)
+	viewport.add_child(stage)
+	var character := CHARACTER_CATALOG.MODELS[character_index].instantiate() as Node3D
+	character.name = "Character"
+	character.rotation.y = PI
+	character.scale = Vector3.ONE * 0.92
+	stage.add_child(character)
+	stage.set("preview_model", character)
+	_apply_preview_textures(character, character_index)
+	_play_preview_idle(character)
+	var camera := Camera3D.new()
+	camera.position = Vector3(0.0, 1.0, 3.6)
+	camera.rotation.x = -0.02
+	camera.fov = 30.0
+	camera.current = true
+	stage.add_child(camera)
+	var key_light := OmniLight3D.new()
+	key_light.position = Vector3(-1.2, 2.4, 2.0)
+	key_light.light_color = Color(0.76, 0.9, 0.88)
+	key_light.light_energy = 2.2
+	key_light.omni_range = 8.0
+	stage.add_child(key_light)
+	var fill_light := OmniLight3D.new()
+	fill_light.position = Vector3(1.4, 1.5, -1.4)
+	fill_light.light_color = CHARACTER_CATALOG.COLORS[character_index]
+	fill_light.light_energy = 1.0
+	fill_light.omni_range = 6.0
+	stage.add_child(fill_light)
+	return container
+
+func _apply_preview_textures(character: Node3D, character_index: int) -> void:
+	for node in character.find_children("*", "MeshInstance3D", true, false):
+		var mesh_instance := node as MeshInstance3D
+		if mesh_instance.mesh == null:
+			continue
+		for surface_index in range(mesh_instance.mesh.get_surface_count()):
+			var source_material: Material = mesh_instance.get_active_material(surface_index)
+			var material := StandardMaterial3D.new()
+			if source_material is StandardMaterial3D:
+				material = (source_material as StandardMaterial3D).duplicate() as StandardMaterial3D
+			material.albedo_texture = CHARACTER_CATALOG.ALBEDO_TEXTURES[character_index]
+			material.ao_enabled = true
+			material.ao_texture = CHARACTER_CATALOG.AO_TEXTURES[character_index]
+			material.ao_texture_channel = BaseMaterial3D.TEXTURE_CHANNEL_RED
+			mesh_instance.set_surface_override_material(surface_index, material)
+
+func _play_preview_idle(character: Node3D) -> void:
+	for node in character.find_children("*", "AnimationPlayer", true, false):
+		var animation_player := node as AnimationPlayer
+		for animation_name in animation_player.get_animation_list():
+			if "idle" in String(animation_name).to_lower():
+				animation_player.call_deferred("play", animation_name)
+				return
 
 func _host_game() -> void:
 	var peer := ENetMultiplayerPeer.new()
@@ -421,8 +876,8 @@ func _host_game() -> void:
 		return
 	multiplayer.multiplayer_peer = peer
 	_spawn_peer(1)
-	_lobby_controls.hide()
-	_refresh_status("Hosting on port %d" % GAME_PORT)
+	_show_lobby()
+	_refresh_status("Lobby open on this network · Port %d · Waiting for another runner" % GAME_PORT)
 
 func _join_game() -> void:
 	var address := _address_input.text.strip_edges()
@@ -434,6 +889,7 @@ func _join_game() -> void:
 		_set_status("Couldn't connect: %s" % error_string(error))
 		return
 	multiplayer.multiplayer_peer = peer
+	_show_lobby()
 	_set_status("Connecting to %s:%d..." % [address, GAME_PORT])
 
 func _spawn_peer(peer_id: int) -> void:
@@ -450,10 +906,12 @@ func _get_available_character_index() -> int:
 		var assigned_index: Variant = player.get("character_index")
 		if assigned_index != null:
 			used_character_indices[int(assigned_index)] = true
-	for index in range(4):
+	var available_indices: Array[int] = []
+	for index in range(CHARACTER_CATALOG.MODELS.size()):
 		if not used_character_indices.has(index):
-			return index
-	return -1
+			available_indices.append(index)
+	available_indices.shuffle()
+	return available_indices[0] if not available_indices.is_empty() else -1
 
 func _spawn_player(data: Variant) -> Node:
 	var peer_id := int(data.get("peer_id", 1))
@@ -473,7 +931,7 @@ func _on_peer_connected(peer_id: int) -> void:
 		_refresh_status("Player %d joined" % peer_id)
 		_maybe_start_round.call_deferred()
 	else:
-		_refresh_player_list.call_deferred()
+		_refresh_lobby_roster.call_deferred(true)
 
 func _on_peer_disconnected(peer_id: int) -> void:
 	if multiplayer.is_server():
@@ -482,57 +940,49 @@ func _on_peer_disconnected(peer_id: int) -> void:
 			player_spawner.despawn(player)
 			_refresh_status.call_deferred("Player %d left" % peer_id)
 	else:
-		_refresh_player_list.call_deferred()
+		_refresh_lobby_roster.call_deferred(true)
 
 func _on_player_spawned(_player: Node) -> void:
-	_refresh_player_list.call_deferred()
+	_refresh_lobby_roster.call_deferred(true)
 	_maybe_start_round.call_deferred()
 
 func _on_player_despawned(_player: Node) -> void:
-	_refresh_player_list.call_deferred()
+	_refresh_lobby_roster.call_deferred(true)
 	_update_round_hud.call_deferred()
 
 func _on_connected_to_server() -> void:
-	_lobby_controls.hide()
-	_refresh_status("Connected to host")
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+	_show_lobby()
+	_refresh_status("Connected to host · Waiting for the round to begin")
 	_update_round_hud()
 
 func _on_connection_failed() -> void:
 	_set_status("Connection failed. Check the host IP and port %d." % GAME_PORT)
 	multiplayer.multiplayer_peer = null
-	_lobby_controls.show()
+	_show_start()
 
 func _on_server_disconnected() -> void:
+	multiplayer.multiplayer_peer = null
 	_set_status("Host disconnected.")
-	_lobby_controls.show()
+	_show_start()
+	_round_active = false
+	_round_finished = false
+	_menu_camera.current = true
+	_round_hud_layer.hide()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	_roster_signature = ""
+	_refresh_lobby_roster.call_deferred(true)
 
 func _refresh_status(message: String) -> void:
 	_status_message = message
-	_refresh_player_list()
-
-func _refresh_player_list() -> void:
-	if _player_list_label == null:
-		return
-	var active_players := get_tree().get_nodes_in_group("players")
-	active_players.sort_custom(func(a: Node, b: Node) -> bool: return a.owner_peer_id < b.owner_peer_id)
-	var lines: PackedStringArray = ["Players (%d/4):" % active_players.size()]
-	for player in active_players:
-		var entry := "Player %d" % player.owner_peer_id
-		if _network_is_active() and player.owner_peer_id == multiplayer.get_unique_id():
-			entry += " (you)"
-		lines.append(entry)
-	if active_players.is_empty():
-		lines.append("Waiting for players...")
-	_player_list_label.text = "\n".join(lines)
 	_render_status()
+	_refresh_lobby_roster()
 
 func _set_status(message: String) -> void:
 	_status_message = message
 	_render_status()
 
 func _render_status() -> void:
-	if _status_label != null:
-		var player_count := get_tree().get_nodes_in_group("players").size()
-		_status_label.text = "%s  |  Players: %d/4" % [_status_message, player_count]
+	if _lobby_status_label != null:
+		_lobby_status_label.text = _status_message
+	if _start_status_label != null:
+		_start_status_label.text = _status_message
