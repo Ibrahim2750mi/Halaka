@@ -24,6 +24,7 @@ var is_alive := true
 var score := 0.0
 var total_alive_time := 0.0
 var respawn_remaining := 0.0
+var spawn_protection_remaining := 0.0
 var held_powerup := ""
 var stun_remaining := 0.0
 var blind_remaining := 0.0
@@ -33,9 +34,11 @@ var _camera_yaw := 0.0
 var _smoothed_camera_position := Vector3.ZERO
 var _camera_follow_ready := false
 var _remote_input := Vector2.ZERO
+var _remote_input_idle_time := 0.0
 var _remote_yaw := 0.0
 var _remote_pitch := 0.0
 var _remote_jump := false
+var _spawn_settle_remaining := 0.0
 var _input_send_timer := 0.0
 var _death_label: Label
 var _powerup_label: Label
@@ -241,6 +244,33 @@ func _apply_alive_state(is_local: bool) -> void:
 	if not is_alive:
 		velocity = Vector3.ZERO
 
+func clear_movement_input() -> void:
+	_remote_input = Vector2.ZERO
+	_remote_jump = false
+	_remote_input_idle_time = 0.0
+
+@rpc("authority", "call_remote", "reliable")
+func reset_for_spawn(world_position: Vector3, spawn_yaw: float = 0.0) -> void:
+	global_position = world_position
+	reset_physics_interpolation()
+	rotation = Vector3(0.0, spawn_yaw, 0.0)
+	velocity = Vector3.ZERO
+	_remote_input = Vector2.ZERO
+	_remote_jump = false
+	_remote_input_idle_time = 0.0
+	_spawn_settle_remaining = 0.25
+	_remote_yaw = spawn_yaw
+	_remote_pitch = 0.0
+	_camera_pitch = 0.0
+	_camera_yaw = spawn_yaw
+	_input_send_timer = 0.0
+	_smoothed_camera_position = world_position + Vector3.UP * 1.55
+	_camera_follow_ready = true
+	_last_animation_position = world_position
+	spawn_protection_remaining = 3.0
+	if camera != null:
+		camera.rotation = Vector3.ZERO
+
 func _create_death_overlay() -> void:
 	var canvas := CanvasLayer.new()
 	canvas.name = "DeathOverlay"
@@ -351,9 +381,23 @@ func _physics_process(delta: float) -> void:
 	if not round_active or not is_alive or stun_remaining > 0.0:
 		velocity = Vector3.ZERO
 		return
+	if _spawn_settle_remaining > 0.0:
+		_spawn_settle_remaining = maxf(0.0, _spawn_settle_remaining - delta)
+		velocity.x = 0.0
+		velocity.z = 0.0
+		if is_on_floor():
+			velocity.y = 0.0
+		else:
+			velocity.y -= gravity * delta
+		move_and_slide()
+		return
 	if multiplayer.is_server():
 		var server_input := _read_move_input() if owner_peer_id == 1 else _remote_input
 		if owner_peer_id != 1:
+			_remote_input_idle_time += delta
+			if _remote_input_idle_time > 0.25:
+				clear_movement_input()
+				server_input = Vector2.ZERO
 			rotation.y = _remote_yaw
 			camera.rotation.x = _remote_pitch
 		var server_jump := Input.is_key_pressed(KEY_SPACE) if owner_peer_id == 1 else _remote_jump
@@ -426,6 +470,11 @@ func _simulate_movement(delta: float, move_input: Vector2, jump_pressed: bool) -
 	else:
 		velocity.y -= gravity * delta
 	move_and_slide()
+	var horizontal_velocity := Vector2(velocity.x, velocity.z)
+	if horizontal_velocity.length() > move_speed:
+		horizontal_velocity = horizontal_velocity.limit_length(move_speed)
+		velocity.x = horizontal_velocity.x
+		velocity.z = horizontal_velocity.y
 
 func _read_move_input() -> Vector2:
 	var move_input := Vector2.ZERO
@@ -443,7 +492,11 @@ func _read_move_input() -> Vector2:
 func _submit_input(move_input: Vector2, body_yaw: float, camera_pitch: float, jump_pressed: bool) -> void:
 	if not multiplayer.is_server() or multiplayer.get_remote_sender_id() != owner_peer_id:
 		return
+	if _spawn_settle_remaining > 0.0:
+		clear_movement_input()
+		return
 	_remote_input = move_input
+	_remote_input_idle_time = 0.0
 	_remote_yaw = body_yaw
 	_remote_pitch = camera_pitch
 	_remote_jump = jump_pressed

@@ -305,23 +305,33 @@ func _update_round_hud() -> void:
 
 func _update_players(delta: float) -> void:
 	for player in get_tree().get_nodes_in_group("players"):
+		player.spawn_protection_remaining = maxf(0.0, player.spawn_protection_remaining - delta)
 		player.stun_remaining = maxf(0.0, player.stun_remaining - delta)
 		player.blind_remaining = maxf(0.0, player.blind_remaining - delta)
 		player.wall_travel_remaining = maxf(0.0, player.wall_travel_remaining - delta)
-		if player.is_alive and maze.to_local(player.global_position).y < -1.0:
-			player.is_alive = false
-			player.respawn_remaining = RESPAWN_DELAY
+		var local_position: Vector3 = maze.to_local(player.global_position)
+		var map_half_width: float = 0.5 * maze.size_x * maze.corridor_width
+		var map_half_depth: float = 0.5 * maze.size_y * maze.corridor_width
+		var outside_map := absf(local_position.x) > map_half_width + 1.0 or absf(local_position.z) > map_half_depth + 1.0
+		if player.is_alive and (local_position.y < -1.0 or outside_map):
+			# A fall is a map recovery, not a monster catch. Put the player back on a
+			# verified floor cell immediately instead of trapping them in respawn.
+			_place_player_at_spawn(player)
+			player.is_alive = true
+			player.respawn_remaining = 0.0
 			player.wall_travel_remaining = 0.0
-			player.velocity = Vector3.ZERO
+			continue
 		if player.is_alive:
 			player.total_alive_time += delta
 			# The point rate rises with this player's own accumulated survival time.
 			player.score += delta * (1.0 + player.total_alive_time / 60.0)
 			_try_collect_powerup(player)
-			if _is_caught_by_monster(player):
+			if player.spawn_protection_remaining <= 0.0 and _is_caught_by_monster(player):
 				player.is_alive = false
 				player.respawn_remaining = RESPAWN_DELAY
+				player.held_powerup = ""
 				player.wall_travel_remaining = 0.0
+				player.clear_movement_input()
 				player.velocity = Vector3.ZERO
 		else:
 			player.respawn_remaining = maxf(0.0, player.respawn_remaining - delta)
@@ -330,18 +340,33 @@ func _update_players(delta: float) -> void:
 
 func _is_caught_by_monster(player: Node3D) -> bool:
 	var monster := get_node_or_null("Monster") as CharacterBody3D
-	return monster != null and monster.global_position.distance_to(player.global_position) <= 1.35
+	return monster != null and monster.visible and monster.round_active and monster.global_position.distance_to(player.global_position) <= 1.35
 
 func _respawn_player(player: Node) -> void:
-	player.global_position = _get_spawn_position(player.owner_peer_id)
-	player.velocity = Vector3.ZERO
+	_place_player_at_spawn(player)
 	player.respawn_remaining = 0.0
 	player.is_alive = true
 
+func _place_player_at_spawn(player: Node) -> void:
+	var spawn_position: Vector3 = _get_spawn_position(player.owner_peer_id)
+	player.reset_for_spawn(spawn_position)
+	if _network_is_active() and multiplayer.is_server():
+		player.reset_for_spawn.rpc(spawn_position)
+
 func _get_spawn_position(peer_id: int) -> Vector3:
-	var spawn_offsets := [Vector2i(0, 0), Vector2i(1, 0), Vector2i(0, 1), Vector2i(-1, 0)]
-	var offset: Vector2i = spawn_offsets[(peer_id - 1) % spawn_offsets.size()]
-	return maze.cell_to_world(Vector2i(24, 24) + offset) + Vector3(0, 0.1, 0)
+	var center := Vector2i(maze.size_x / 2, maze.size_y / 2)
+	var spawn_offsets: Array[Vector2i] = [
+		Vector2i.ZERO, Vector2i.RIGHT, Vector2i.LEFT, Vector2i.DOWN, Vector2i.UP,
+	]
+	var valid_spawn_cells: Array[Vector2i] = []
+	for offset in spawn_offsets:
+		var cell: Vector2i = center + offset
+		if maze._is_open(cell.x, cell.y) and not maze.find_path(center, cell).is_empty():
+			valid_spawn_cells.append(cell)
+	if valid_spawn_cells.is_empty():
+		return maze.cell_to_world(center) + Vector3.UP * 0.15
+	var spawn_index := posmod(peer_id - 1, valid_spawn_cells.size())
+	return maze.cell_to_world(valid_spawn_cells[spawn_index]) + Vector3.UP * 0.15
 
 func _separate_maze_wall_colliders() -> void:
 	var wall_body := StaticBody3D.new()
@@ -367,10 +392,14 @@ func _start_round_from_host() -> void:
 	_round_sync_timer = 0.0
 	_powerup_spawn_timer = POWERUP_RESPAWN_INTERVAL
 	for player in get_tree().get_nodes_in_group("players"):
-		player.round_active = true
+		_place_player_at_spawn(player)
+		player.is_alive = true
+		player.respawn_remaining = 0.0
+		player.held_powerup = ""
 		player.stun_remaining = 0.0
 		player.blind_remaining = 0.0
 		player.wall_travel_remaining = 0.0
+		player.round_active = true
 	_spawn_round_powerups()
 	_sync_round_state.rpc(_round_active, _round_time_left, _round_finished)
 	_refresh_status("Round started")
@@ -437,9 +466,7 @@ func _start_rematch_from_host() -> void:
 		player.stun_remaining = 0.0
 		player.blind_remaining = 0.0
 		player.wall_travel_remaining = 0.0
-		player.velocity = Vector3.ZERO
-		player.global_position = _get_spawn_position(player.owner_peer_id)
-		player.rotation = Vector3.ZERO
+		_place_player_at_spawn(player)
 	var barricades := get_node_or_null("Barricades")
 	if barricades != null:
 		for barricade in barricades.get_children():
@@ -665,6 +692,9 @@ func _sync_round_state(active: bool, time_left: float, finished: bool) -> void:
 	_round_hud_layer.visible = active
 	_round_complete_layer.visible = finished
 	_menu_camera.current = not active
+	var dome := maze.get_node_or_null("DomeCeiling") as MeshInstance3D
+	if dome != null:
+		dome.visible = active
 	var monster := get_node_or_null("Monster")
 	if monster != null:
 		monster.set("visible", active)
@@ -1281,7 +1311,7 @@ func _spawn_player(data: Variant) -> Node:
 	player.character_index = character_index
 	player.round_active = _round_active
 	player.set_multiplayer_authority(1, true)
-	player.position = _get_spawn_position(peer_id)
+	player.position = players.to_local(_get_spawn_position(peer_id))
 	return player
 
 func _on_peer_connected(peer_id: int) -> void:
