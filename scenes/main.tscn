@@ -1652,6 +1652,7 @@ environment = SubResource("Environment_horror")
 
 [node name="Maze" type="StaticBody3D" parent="." unique_id=1620125150]
 script = ExtResource("1_maze")
+height = 20.25
 
 [node name="CaveFloor" type="MultiMeshInstance3D" parent="Maze" unique_id=106914760]
 multimesh = SubResource("MultiMesh_7mycd")

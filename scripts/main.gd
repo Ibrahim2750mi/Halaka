@@ -692,9 +692,6 @@ func _sync_round_state(active: bool, time_left: float, finished: bool) -> void:
 	_round_hud_layer.visible = active
 	_round_complete_layer.visible = finished
 	_menu_camera.current = not active
-	var dome := maze.get_node_or_null("DomeCeiling") as MeshInstance3D
-	if dome != null:
-		dome.visible = active
 	var monster := get_node_or_null("Monster")
 	if monster != null:
 		monster.set("visible", active)

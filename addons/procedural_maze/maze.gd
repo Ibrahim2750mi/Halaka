@@ -22,7 +22,7 @@ extends StaticBody3D
 		wall_width = value
 		if is_inside_tree():
 			generate()
-@export_range(1.0, 10.0, 0.1) var height := 4.05:
+@export_range(1.0, 30.0, 0.1) var height := 20.25:
 	set(value):
 		height = value
 		if is_inside_tree():
@@ -35,7 +35,6 @@ extends StaticBody3D
 
 const FLOOR_ASSET: PackedScene = preload("res://assets/environment/kenney_modular-cave-kit_1.0/Models/GLB format/template-floor.glb")
 const WALL_ASSET: PackedScene = preload("res://assets/environment/kenney_modular-cave-kit_1.0/Models/GLB format/template-wall.glb")
-const CAVE_COLORMAP: Texture2D = preload("res://assets/environment/kenney_modular-cave-kit_1.0/Models/GLB format/Textures/colormap.png")
 var _open_cells: Array[PackedByteArray] = []
 var _chamber_baffles: Array[Dictionary] = []
 
@@ -50,6 +49,8 @@ func generate(rebuild_geometry := true) -> void:
 		for child in get_children():
 			remove_child(child)
 			child.queue_free()
+	else:
+		_remove_dome_ceiling()
 	_open_cells.clear()
 	_chamber_baffles.clear()
 	for x in range(size_x):
@@ -86,7 +87,8 @@ func generate(rebuild_geometry := true) -> void:
 		_carve_passage(chambers[first], chambers[second], rng)
 	if rebuild_geometry:
 		_build_geometry()
-	_ensure_dome_ceiling()
+	else:
+		_resize_saved_wall_geometry()
 
 func _add_chamber_baffles(center: Vector2i, radius_x: float, radius_y: float, add_cross_walls: bool, protect_spawn := false) -> void:
 	var row_offsets: Array[int] = [-4, -2, 0, 2, 4]
@@ -306,92 +308,27 @@ func _build_geometry() -> void:
 					var wall_center := origin + Vector3((line + 0.5) * cell_size, 0.0, index * cell_size)
 					_add_cave_wall("ChamberBaffle", wall_center, false, cell_size)
 
-func _ensure_dome_ceiling() -> void:
-	var old_collision := get_node_or_null("DomeCeilingCollision") as CollisionShape3D
-	if old_collision != null:
-		old_collision.queue_free()
-	var existing_dome := get_node_or_null("DomeCeiling") as MeshInstance3D
-	if existing_dome != null:
-		existing_dome.visible = false
-		return
-	var half_x := 0.5 * size_x * corridor_width
-	var half_z := 0.5 * size_y * corridor_width
-	var radius := Vector2(half_x, half_z).length() + 1.5
-	var base_height := height + 0.2
-	var rise := maxf(9.0, height * 2.2)
-	var ring_count := 24
-	var segment_count := 72
-	var rng := RandomNumberGenerator.new()
-	rng.seed = random_seed * 1543 + 917
-	var surface := SurfaceTool.new()
-	surface.begin(Mesh.PRIMITIVE_TRIANGLES)
-	surface.set_smooth_group(-1)
-	var apex := Vector3(0.0, base_height + rise, 0.0)
-	var rings: Array[PackedVector3Array] = []
-	for ring_index in range(1, ring_count + 1):
-		var theta := (float(ring_index) / float(ring_count)) * PI * 0.5
-		var ring := PackedVector3Array()
-		for segment in range(segment_count):
-			var phi := TAU * float(segment) / float(segment_count)
-			var angular_rock := sin(phi * 9.0 + theta * 3.0) * 0.012 + cos(phi * 17.0 - theta * 5.0) * 0.007
-			var band_rock := sin(theta * 19.0 + phi * 2.0) * 0.008
-			var roughness := 1.0 + angular_rock + band_rock + rng.randf_range(-0.007, 0.007)
-			var radial := sin(theta) * roughness
-			ring.append(Vector3(cos(phi) * radius * radial, base_height + rise * cos(theta), sin(phi) * radius * radial))
-		rings.append(ring)
-	for segment in range(segment_count):
-		var next_segment := (segment + 1) % segment_count
-		var u_a := 0.04 + float(segment) / float(segment_count) * 0.42
-		var u_b := 0.04 + float(segment + 1) / float(segment_count) * 0.42
-		var ring_v := 0.04 + 0.42 / float(ring_count)
-		_add_dome_triangle(
-			surface,
-			apex,
-			rings[0][segment],
-			rings[0][next_segment],
-			Vector2(0.25, 0.04),
-			Vector2(u_a, ring_v),
-			Vector2(u_b, ring_v)
-		)
-	for ring_index in range(rings.size() - 1):
-		for segment in range(segment_count):
-			var next_segment := (segment + 1) % segment_count
-			var upper_a: Vector3 = rings[ring_index][segment]
-			var upper_b: Vector3 = rings[ring_index][next_segment]
-			var lower_a: Vector3 = rings[ring_index + 1][segment]
-			var lower_b: Vector3 = rings[ring_index + 1][next_segment]
-			var u_a := 0.04 + float(segment) / float(segment_count) * 0.42
-			var u_b := 0.04 + float(segment + 1) / float(segment_count) * 0.42
-			var upper_v := 0.04 + float(ring_index + 1) / float(ring_count) * 0.42
-			var lower_v := 0.04 + float(ring_index + 2) / float(ring_count) * 0.42
-			var upper_uv_a := Vector2(u_a, upper_v)
-			var upper_uv_b := Vector2(u_b, upper_v)
-			var lower_uv_a := Vector2(u_a, lower_v)
-			var lower_uv_b := Vector2(u_b, lower_v)
-			_add_dome_triangle(surface, upper_a, lower_a, lower_b, upper_uv_a, lower_uv_a, lower_uv_b)
-			_add_dome_triangle(surface, upper_a, lower_b, upper_b, upper_uv_a, lower_uv_b, upper_uv_b)
-	surface.generate_normals()
-	var dome_mesh := surface.commit()
-	var dome_material := StandardMaterial3D.new()
-	dome_material.albedo_texture = CAVE_COLORMAP
-	dome_material.roughness = 0.96
-	dome_material.cull_mode = BaseMaterial3D.CULL_DISABLED
-	dome_material.metallic = 0.0
-	dome_mesh.surface_set_material(0, dome_material)
-	var dome := MeshInstance3D.new()
-	dome.name = "DomeCeiling"
-	dome.mesh = dome_mesh
-	dome.visible = false
-	add_child(dome)
-	dome.owner = get_tree().edited_scene_root if Engine.is_editor_hint() else null
+func _resize_saved_wall_geometry() -> void:
+	var wall_scale_y := height / 4.05
+	for child in get_children():
+		if child is CollisionShape3D:
+			var collision := child as CollisionShape3D
+			var box := collision.shape as BoxShape3D
+			if box != null and box.size.y > 1.0:
+				var resized_box := box.duplicate() as BoxShape3D
+				resized_box.size.y = height
+				collision.shape = resized_box
+				collision.position.y = height * 0.5
+		elif child is Node3D and (child.name.begins_with("CaveWall_") or child.name.begins_with("ChamberBaffle")):
+			var wall := child as Node3D
+			wall.scale.y = wall_scale_y
 
-func _add_dome_triangle(surface: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, uv_a: Vector2, uv_b: Vector2, uv_c: Vector2) -> void:
-	surface.set_uv(uv_a)
-	surface.add_vertex(a)
-	surface.set_uv(uv_b)
-	surface.add_vertex(b)
-	surface.set_uv(uv_c)
-	surface.add_vertex(c)
+func _remove_dome_ceiling() -> void:
+	for child_name in ["DomeCeiling", "DomeCeilingCollision"]:
+		var old_child := get_node_or_null(child_name)
+		if old_child != null:
+			remove_child(old_child)
+			old_child.queue_free()
 
 func _add_floor_visuals(origin: Vector3, cell_size: float) -> void:
 	var floor_root := FLOOR_ASSET.instantiate()
